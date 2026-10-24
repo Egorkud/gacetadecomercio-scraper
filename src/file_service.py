@@ -10,7 +10,8 @@ from fpdf import FPDF
 
 from src.logger import LoggerMixin
 
-INVALID_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+QUOTES_RE = re.compile(r"[\"“”«»]")
+INVALID_CHARS_RE = re.compile(r"[<>:/\\|?*\x00-\x1f]")
 SPACES_RE = re.compile(r"\s+")
 TYPOGRAPHIC_CHARS = str.maketrans({
     "‘": "'", "’": "'", "“": '"', "”": '"',
@@ -36,15 +37,18 @@ class FileService(LoggerMixin):
         self.files_dir = files_dir
 
     @staticmethod
-    def sanitize(value: str, max_length: int | None = None) -> str:
-        value = INVALID_CHARS_RE.sub("-", value)
-        value = SPACES_RE.sub(" ", value).strip(" .")
+    def clean(value: str) -> str:
+        return INVALID_CHARS_RE.sub("-", QUOTES_RE.sub("", value)).strip()
+
+    @classmethod
+    def sanitize(cls, value: str, max_length: int | None = None) -> str:
+        value = SPACES_RE.sub(" ", cls.clean(value)).strip(" .")
         if max_length:
             value = value[:max_length].rstrip(" .")
         return value or "unknown"
 
     def build_filename(self, *parts: str, extension: str = "pdf") -> str:
-        stem = "_".join(INVALID_CHARS_RE.sub("-", part).strip() for part in parts if part)
+        stem = "_".join(self.clean(part) for part in parts if part)
         return f"{self.sanitize(stem, self.MAX_STEM_LENGTH)}.{extension}"
 
     def build_path(self, file_name: str, subdir: str | None = None) -> Path:
