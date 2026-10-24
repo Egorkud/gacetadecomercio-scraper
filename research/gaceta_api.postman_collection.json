@@ -1,0 +1,138 @@
+{
+  "info": {
+    "name": "Gaceta de Comercio API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "api", "value": "https://servicios.seprec.gob.bo/api" },
+    { "key": "day", "value": "2026-10-23" }
+  ],
+  "item": [
+    {
+      "name": "0. Catalog of types",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Origin", "value": "https://gacetadecomercio.gob.bo" },
+          { "key": "Referer", "value": "https://gacetadecomercio.gob.bo/" }
+        ],
+        "url": "{{api}}/publicaciones/catalogos/lista",
+        "body": { "mode": "raw", "raw": "{\"codigo\": \"\"}" }
+      }
+    },
+    {
+      "name": "1. Whole day (total > 100 -> split)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Origin", "value": "https://gacetadecomercio.gob.bo" },
+          { "key": "Referer", "value": "https://gacetadecomercio.gob.bo/" }
+        ],
+        "url": "{{api}}/publicaciones",
+        "body": { "mode": "raw", "raw": "{\n  \"fecha\": \"5\", \"fechaInicial\": \"{{day}}\", \"fechaFinal\": \"{{day}}\",\n  \"categoria\": \"\", \"tipoPublicacion\": \"\", \"razonSocial\": \"\", \"matricula\": \"\", \"resumen\": \"\",\n  \"limite\": 100, \"pagina\": 1\n}" }
+      }
+    },
+    {
+      "name": "2. Day + group (categoria 1..4)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Origin", "value": "https://gacetadecomercio.gob.bo" },
+          { "key": "Referer", "value": "https://gacetadecomercio.gob.bo/" }
+        ],
+        "url": "{{api}}/publicaciones",
+        "body": { "mode": "raw", "raw": "{\n  \"fecha\": \"5\", \"fechaInicial\": \"{{day}}\", \"fechaFinal\": \"{{day}}\",\n  \"categoria\": \"1\", \"tipoPublicacion\": \"\", \"razonSocial\": \"\", \"matricula\": \"\", \"resumen\": \"\",\n  \"limite\": 100, \"pagina\": 1\n}" }
+      }
+    },
+    {
+      "name": "3. Type + month window (2002 -> 1000+, must split)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Origin", "value": "https://gacetadecomercio.gob.bo" },
+          { "key": "Referer", "value": "https://gacetadecomercio.gob.bo/" }
+        ],
+        "url": "{{api}}/publicaciones",
+        "body": { "mode": "raw", "raw": "{\n  \"fecha\": \"5\", \"fechaInicial\": \"2026-10-01\", \"fechaFinal\": \"2026-10-31\",\n  \"categoria\": \"\", \"tipoPublicacion\": \"2002\", \"razonSocial\": \"\", \"matricula\": \"\", \"resumen\": \"\",\n  \"limite\": 100, \"pagina\": 1\n}" }
+      }
+    },
+    {
+      "name": "4. Type + single day (fits one page)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Origin", "value": "https://gacetadecomercio.gob.bo" },
+          { "key": "Referer", "value": "https://gacetadecomercio.gob.bo/" }
+        ],
+        "url": "{{api}}/publicaciones",
+        "body": { "mode": "raw", "raw": "{\n  \"fecha\": \"5\", \"fechaInicial\": \"{{day}}\", \"fechaFinal\": \"{{day}}\",\n  \"categoria\": \"\", \"tipoPublicacion\": \"2002\", \"razonSocial\": \"\", \"matricula\": \"\", \"resumen\": \"\",\n  \"limite\": 100, \"pagina\": 1\n}" }
+      }
+    },
+    {
+      "name": "5. Hidden type not in catalog (1006 = 2897)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Origin", "value": "https://gacetadecomercio.gob.bo" },
+          { "key": "Referer", "value": "https://gacetadecomercio.gob.bo/" }
+        ],
+        "url": "{{api}}/publicaciones",
+        "body": { "mode": "raw", "raw": "{\n  \"fecha\": \"\", \"fechaInicial\": \"\", \"fechaFinal\": \"\",\n  \"categoria\": \"\", \"tipoPublicacion\": \"1006\", \"razonSocial\": \"\", \"matricula\": \"\", \"resumen\": \"\",\n  \"limite\": 10, \"pagina\": 1\n}" }
+      }
+    },
+    {
+      "name": "6a. Detail of text publication (documento = null)",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Origin", "value": "https://gacetadecomercio.gob.bo" },
+          { "key": "Referer", "value": "https://gacetadecomercio.gob.bo/" }
+        ],
+        "url": "{{api}}/publicaciones/228600"
+      }
+    },
+    {
+      "name": "6b. Detail with PDF (documento = base64, ~6.7 MB)",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Origin", "value": "https://gacetadecomercio.gob.bo" },
+          { "key": "Referer", "value": "https://gacetadecomercio.gob.bo/" }
+        ],
+        "url": "{{api}}/publicaciones/228599"
+      }
+    },
+    {
+      "name": "7a. Pagination bug: old day, limite 10 (change pagina 1..9, ids repeat/miss)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Origin", "value": "https://gacetadecomercio.gob.bo" },
+          { "key": "Referer", "value": "https://gacetadecomercio.gob.bo/" }
+        ],
+        "url": "{{api}}/publicaciones",
+        "body": { "mode": "raw", "raw": "{\n  \"fecha\": \"5\", \"fechaInicial\": \"2019-03-14\", \"fechaFinal\": \"2019-03-14\",\n  \"categoria\": \"\", \"tipoPublicacion\": \"\", \"razonSocial\": \"\", \"matricula\": \"\", \"resumen\": \"\",\n  \"limite\": 10, \"pagina\": 1\n}" }
+      }
+    },
+    {
+      "name": "7b. Same old day, limite 100 (all 84 in one page)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Origin", "value": "https://gacetadecomercio.gob.bo" },
+          { "key": "Referer", "value": "https://gacetadecomercio.gob.bo/" }
+        ],
+        "url": "{{api}}/publicaciones",
+        "body": { "mode": "raw", "raw": "{\n  \"fecha\": \"5\", \"fechaInicial\": \"2019-03-14\", \"fechaFinal\": \"2019-03-14\",\n  \"categoria\": \"\", \"tipoPublicacion\": \"\", \"razonSocial\": \"\", \"matricula\": \"\", \"resumen\": \"\",\n  \"limite\": 100, \"pagina\": 1\n}" }
+      }
+    }
+  ]
+}
