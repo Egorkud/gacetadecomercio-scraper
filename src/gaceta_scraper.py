@@ -263,10 +263,11 @@ class GacetaScraper(BaseScraper):
     def _failure_reason(exc: Exception) -> str:
         if isinstance(exc, HttpError):
             try:
-                message = json.loads(exc.body).get("mensaje")
+                data = json.loads(exc.body)
             except ValueError:
-                message = exc.body[:200]
-            return f"HTTP {exc.status}: {message}"
+                data = None
+            message = data.get("mensaje") if isinstance(data, dict) else None
+            return f"HTTP {exc.status}: {message or exc.body[:200]}"
         return str(exc)[:300]
 
     def _save_from_detail(self, path: Path, publication: Publication) -> None:

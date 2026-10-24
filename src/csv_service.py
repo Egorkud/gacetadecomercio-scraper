@@ -6,6 +6,25 @@ from typing import IO, Any, Self
 
 from src.logger import LoggerMixin
 
+# Spreadsheet apps evaluate cells starting with these as formulas.
+FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def escape_cell(value: Any) -> Any:
+    if isinstance(value, str) and value.startswith(FORMULA_PREFIXES):
+        return f"'{value}"
+    return value
+
+
+def unescape_cell(value: str) -> str:
+    if value.startswith("'") and value[1:].startswith(FORMULA_PREFIXES):
+        return value[1:]
+    return value
+
+
+def escape_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: escape_cell(value) for key, value in row.items()}
+
 
 class CsvService(LoggerMixin):
     # utf-8-sig so Excel shows Spanish characters correctly.
@@ -47,7 +66,7 @@ class CsvService(LoggerMixin):
             raise RuntimeError("CsvService is not open")
         count = 0
         for row in rows:
-            self._writer.writerow(row)
+            self._writer.writerow(escape_row(row))
             count += 1
         # fsync so every written row survives a crash or power loss.
         self._file.flush()
@@ -63,7 +82,7 @@ class CsvService(LoggerMixin):
         with tmp_path.open("w", encoding=cls.ENCODING, newline="") as f:
             writer = csv.DictWriter(f, fieldnames=list(fieldnames))
             writer.writeheader()
-            writer.writerows(rows)
+            writer.writerows(escape_row(row) for row in rows)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, path)
@@ -71,7 +90,7 @@ class CsvService(LoggerMixin):
     @classmethod
     def read_rows(cls, path: Path) -> list[dict[str, str]]:
         with path.open(encoding=cls.ENCODING, newline="") as f:
-            return list(csv.DictReader(f))
+            return [{key: unescape_cell(value or "") for key, value in row.items()} for row in csv.DictReader(f)]
 
     @classmethod
     def merge(cls, paths: Iterable[Path], output: Path, key: str | None = None) -> int:
