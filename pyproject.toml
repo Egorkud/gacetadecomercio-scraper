@@ -2,4 +2,7 @@
 name = "gacetadecomercio-scraper"
 version = "0.1.0"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "curl-cffi>=0.16.3",
+    "fpdf2>=2.8.9",
+]
