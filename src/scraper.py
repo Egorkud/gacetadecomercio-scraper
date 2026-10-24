@@ -1,5 +1,9 @@
+import re
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Self
+from urllib.parse import urlsplit
 
 from curl_cffi import requests
 from curl_cffi.requests import Response
@@ -17,7 +21,7 @@ class ScraperError(Exception):
 
 class HttpError(ScraperError):
     def __init__(self, status: int, url: str, body: str = "") -> None:
-        super().__init__(f"HTTP {status} for {url}: {body[:300]}")
+        super().__init__(f"HTTP {status} for {url}: {body}")
         self.status = status
         self.url = url
         self.body = body
@@ -94,12 +98,24 @@ class BaseScraper(LoggerMixin):
         try:
             return response.json()
         except ValueError as exc:
-            raise ScraperError(f"Invalid JSON from {response.url}: {response.text[:300]}") from exc
+            path = self._save_response(response)
+            raise ScraperError(
+                f"Invalid JSON from {response.url} (HTTP {response.status_code}, "
+                f"{response.headers.get('content-type')}, {len(response.content)} bytes), body saved to {path}"
+            ) from exc
 
     def build_url(self, url: str) -> str:
         if url.startswith(("http://", "https://")):
             return url
         return f"{self.settings.api_base_url.rstrip('/')}/{url.lstrip('/')}"
+
+    def _save_response(self, response: Response) -> Path:
+        """Keep a broken response in full; it can be megabytes of base64, too big for a log line."""
+        name = re.sub(r"\W+", "-", urlsplit(response.url).path).strip("-")
+        path = self.settings.logs_dir / "responses" / f"{datetime.now():%Y-%m-%d_%H-%M-%S-%f}_{name}.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(response.content)
+        return path
 
     def _throttle(self) -> None:
         wait = self.settings.min_request_interval - (time.monotonic() - self._last_request_at)
@@ -127,4 +143,4 @@ class BaseScraper(LoggerMixin):
         if response.headers.get("cf-mitigated") == "challenge":
             return True
         content_type = response.headers.get("content-type", "")
-        return "text/html" in content_type and "Just a moment" in response.text[:2000]
+        return "text/html" in content_type and "Just a moment" in response.text

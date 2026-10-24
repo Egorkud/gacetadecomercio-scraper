@@ -317,13 +317,13 @@ class GacetaScraper(BaseScraper):
     def _failure_reason(exc: Exception) -> str:
         """Short reason for failed.csv, e.g. "HTTP 412: Error al obtener el archivo"."""
         if not isinstance(exc, HttpError):
-            return str(exc)[:300]
+            return str(exc)
         try:
             data = json.loads(exc.body)
         except ValueError:
             data = None
         message = data.get("mensaje") if isinstance(data, dict) else None
-        return f"HTTP {exc.status}: {message or exc.body[:200]}"
+        return f"HTTP {exc.status}: {message or exc.body}"
 
     def log_summary(self) -> None:
         stats = self.stats
