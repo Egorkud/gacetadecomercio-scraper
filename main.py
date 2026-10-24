@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 
 from src.config import Settings
 from src.csv_service import CsvService
+from src.failed_registry import FailedRegistry
 from src.file_service import FileService
 from src.gaceta_scraper import GacetaScraper
 from src.logger import setup_logging
@@ -21,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--to", dest="date_to", type=date.fromisoformat, help="end date, YYYY-MM-DD")
     parser.add_argument("--categories", nargs="+", default=[], help="type codes, e.g. 1001 2001")
     parser.add_argument("--all-types", action="store_true", help="also collect types hidden from the site catalog")
+    parser.add_argument("--retry-failed", action="store_true", help="only retry publications listed in failed.csv")
     parser.add_argument("--min-interval", type=float, help="min seconds between requests")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
@@ -57,10 +59,14 @@ def main() -> None:
 
     csv_path = settings.output_dir / f"publications_{run_id}.csv"
     file_service = FileService(settings.files_dir)
+    failed = FailedRegistry(settings.failed_path)
     try:
         with CsvService(csv_path, CsvRecord.fieldnames()) as csv_service:
-            with GacetaScraper(settings, csv_service, file_service) as scraper:
-                scraper.run()
+            with GacetaScraper(settings, csv_service, file_service, failed) as scraper:
+                if args.retry_failed:
+                    scraper.retry_failed()
+                else:
+                    scraper.run()
     except KeyboardInterrupt:
         logger.warning("Interrupted by user, progress is saved")
 

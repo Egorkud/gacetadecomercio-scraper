@@ -1,3 +1,4 @@
+import json
 import math
 from collections import Counter
 from collections.abc import Iterator
@@ -10,7 +11,8 @@ from src.config import Settings
 from src.csv_service import CsvService
 from src.file_service import FileService, FileServiceError
 from src.models import Category, CsvRecord, Publication, PublicationDetail, parse_date
-from src.scraper import BaseScraper, ScraperError
+from src.failed_registry import FailedRegistry
+from src.scraper import BaseScraper, HttpError, ScraperError
 
 # Types offered by the site's "Publicación" dropdown (POST publicaciones/catalogos/lista).
 TASK_PUBLICATION_TYPES: dict[str, str] = {
@@ -74,12 +76,20 @@ class RunStats:
 
 
 class GacetaScraper(BaseScraper):
-    def __init__(self, settings: Settings, csv_service: CsvService, file_service: FileService) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        csv_service: CsvService,
+        file_service: FileService,
+        failed: FailedRegistry,
+    ) -> None:
         super().__init__(settings)
         self.csv = csv_service
         self.files = file_service
+        self.failed = failed
         self.stats = RunStats()
         self._seen_ids: set[str] = set()
+        self._failed_this_run: set[str] = set()
 
     def run(self) -> RunStats:
         date_to = self.settings.date_to or date.today()
@@ -111,7 +121,20 @@ class GacetaScraper(BaseScraper):
                 if not self._consume(category, self.iter_range(code, window_from, window_to)):
                     del large[code]
 
+        if self._failed_this_run:
+            # Server-side errors can be transient, so give this run's failures one more try.
+            self.retry_failed(self._failed_this_run)
         self.log_summary()
+        return self.stats
+
+    def retry_failed(self, only_ids: set[str] | None = None) -> RunStats:
+        records = [r for r in self.failed.records() if only_ids is None or r.id in only_ids]
+        self.logger.info("Retrying %d failed publications", len(records))
+        for record in records:
+            name = ALL_PUBLICATION_TYPES.get(record.type_code, f"Tipo {record.type_code}")
+            self.process(record.to_publication(Category(record.type_code, name)), force_detail=True)
+        if only_ids is None:
+            self.log_summary()
         return self.stats
 
     def select_types(self) -> list[Category]:
@@ -209,27 +232,42 @@ class GacetaScraper(BaseScraper):
             self.process(Publication.from_api(row, category))
         return limit is None or self.stats.per_type[category.code] < limit
 
-    def process(self, publication: Publication) -> None:
+    def process(self, publication: Publication, force_detail: bool = False) -> None:
         category = publication.category
         file_name = self.files.build_filename(publication.company_name, publication.matricula, publication.code)
         path = self.files.build_path(file_name, f"{category.code} - {category.name}")
         if self.files.exists(path):
             self.stats.skipped += 1
+            self.failed.remove(publication.id)
             self.logger.debug("Skip existing %s", path.name)
             return
 
         try:
-            if category.code in TEXT_PUBLICATION_TYPES:
+            if category.code in TEXT_PUBLICATION_TYPES and not force_detail:
                 self._save_text(path, publication, publication.summary)
             else:
                 self._save_from_detail(path, publication)
         except (ScraperError, FileServiceError) as exc:
+            reason = self._failure_reason(exc)
             self.stats.failed += 1
-            self.logger.error("Failed %s (id %s): %s", publication.code, publication.id, exc)
+            self._failed_this_run.add(publication.id)
+            self.failed.add(publication, reason)
+            self.logger.error("Failed %s (id %s): %s", publication.code, publication.id, reason)
             return
 
+        self.failed.remove(publication.id)
         relative_path = path.relative_to(self.files.files_dir).as_posix()
         self.csv.write_row(CsvRecord.from_publication(publication, relative_path, datetime.now()).to_row())
+
+    @staticmethod
+    def _failure_reason(exc: Exception) -> str:
+        if isinstance(exc, HttpError):
+            try:
+                message = json.loads(exc.body).get("mensaje")
+            except ValueError:
+                message = exc.body[:200]
+            return f"HTTP {exc.status}: {message}"
+        return str(exc)[:300]
 
     def _save_from_detail(self, path: Path, publication: Publication) -> None:
         detail = self.get_detail(publication.id, publication.category)
@@ -259,11 +297,17 @@ class GacetaScraper(BaseScraper):
     def log_summary(self) -> None:
         s = self.stats
         self.logger.info(
-            "Done: %d PDFs saved, %d generated, %d skipped, %d failed",
+            "Done: %d PDFs saved, %d generated, %d skipped, %d failed attempts",
             s.pdf_saved, s.pdf_generated, s.skipped, s.failed,
         )
         for code, count in sorted(s.per_type.items()):
             self.logger.info("  [%s] %d publications", code, count)
+        if len(self.failed):
+            still_failed = sum(pid in self.failed for pid in self._failed_this_run)
+            self.logger.warning(
+                "%d publications of this run are unavailable on the server, %d in total; see %s",
+                still_failed, len(self.failed), self.failed.path,
+            )
 
     def _api_post(self, url: str, payload: dict[str, Any]) -> Any:
         return self._unwrap(self.post_json(url, json=payload), url)

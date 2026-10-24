@@ -81,6 +81,58 @@ class PublicationDetail(Publication):
         )
 
 
+@dataclass(slots=True)
+class FailedRecord:
+    id: str
+    type_code: str
+    code: str
+    company_name: str
+    matricula: str
+    matricula_anterior: str
+    publication_date: str
+    reason: str
+    failed_at: str
+    attempts: int = 1
+
+    @classmethod
+    def fieldnames(cls) -> list[str]:
+        return [f.name for f in fields(cls)]
+
+    @classmethod
+    def from_publication(cls, publication: Publication, reason: str, failed_at: datetime) -> Self:
+        return cls(
+            id=publication.id,
+            type_code=publication.category.code if publication.category else "",
+            code=publication.code,
+            company_name=publication.company_name,
+            matricula=publication.matricula,
+            matricula_anterior=publication.matricula_anterior or "",
+            publication_date=publication.published_at.isoformat() if publication.published_at else "",
+            reason=reason,
+            failed_at=failed_at.isoformat(timespec="seconds"),
+        )
+
+    @classmethod
+    def from_row(cls, row: dict[str, str]) -> Self:
+        return cls(**{**row, "attempts": int(row.get("attempts") or 1)})
+
+    def to_publication(self, category: Category) -> Publication:
+        return Publication(
+            id=self.id,
+            code=self.code,
+            title="",
+            summary="",
+            published_at=parse_date(self.publication_date),
+            company_name=self.company_name,
+            matricula=self.matricula,
+            matricula_anterior=self.matricula_anterior or None,
+            category=category,
+        )
+
+    def to_row(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 @dataclass(frozen=True, slots=True)
 class CsvRecord:
     company_name: str

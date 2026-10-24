@@ -60,5 +60,9 @@ class Settings:
         return self.output_dir / "files"
 
     @property
+    def failed_path(self) -> Path:
+        return self.output_dir / "failed.csv"
+
+    @property
     def headers(self) -> dict[str, str]:
         return dict(DEFAULT_HEADERS)

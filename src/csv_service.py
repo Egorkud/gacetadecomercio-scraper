@@ -56,6 +56,19 @@ class CsvService(LoggerMixin):
         return count
 
     @classmethod
+    def rewrite(cls, path: Path, fieldnames: Sequence[str], rows: Iterable[Mapping[str, Any]]) -> None:
+        """Replace the whole file atomically, so a crash never leaves it half-written."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f"{path.name}.part")
+        with tmp_path.open("w", encoding=cls.ENCODING, newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(fieldnames))
+            writer.writeheader()
+            writer.writerows(rows)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+
+    @classmethod
     def read_rows(cls, path: Path) -> list[dict[str, str]]:
         with path.open(encoding=cls.ENCODING, newline="") as f:
             return list(csv.DictReader(f))
