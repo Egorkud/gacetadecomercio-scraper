@@ -1,4 +1,5 @@
 import csv
+import os
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import IO, Any, Self
@@ -48,7 +49,9 @@ class CsvService(LoggerMixin):
         for row in rows:
             self._writer.writerow(row)
             count += 1
+        # fsync so every written row survives a crash or power loss.
         self._file.flush()
+        os.fsync(self._file.fileno())
         self.rows_written += count
         return count
 

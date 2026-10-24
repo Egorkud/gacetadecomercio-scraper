@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -40,9 +41,15 @@ class Settings:
     backoff_max: float = 300.0
     max_retry_after: float = 1800.0
 
-    max_pages: int | None = None
-    days: int | None = None
+    # The oldest publication in the API is from 2017-06-14.
+    date_from: date = date(2017, 1, 1)
+    date_to: date | None = None
+    window_days: int = 30
+    split_target: int = 70  # expected rows per request when a range is split
+
+    limit_per_type: int | None = None
     categories: tuple[str, ...] = ()
+    all_types: bool = False
 
     output_dir: Path = PROJECT_ROOT / "output"
     logs_dir: Path = PROJECT_ROOT / "logs"

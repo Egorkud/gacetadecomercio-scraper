@@ -60,6 +60,7 @@ class Publication:
 
 @dataclass(slots=True)
 class PublicationDetail(Publication):
+    previous_code: str | None = None
     full_text_html: str | None = None
     archive_path: str | None = None
     document_b64: str | None = None
@@ -73,6 +74,7 @@ class PublicationDetail(Publication):
         base = Publication.from_api(item, category)
         return cls(
             **{f.name: getattr(base, f.name) for f in fields(Publication)},
+            previous_code=item.get("codigoAnterior"),
             full_text_html=item.get("textoCompleto"),
             archive_path=item.get("archivo"),
             document_b64=item.get("documento"),

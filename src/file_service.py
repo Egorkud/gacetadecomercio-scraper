@@ -2,6 +2,8 @@ import base64
 import binascii
 import os
 import re
+from collections.abc import Sequence
+from html import unescape
 from pathlib import Path
 
 from fpdf import FPDF
@@ -14,6 +16,13 @@ TYPOGRAPHIC_CHARS = str.maketrans({
     "‘": "'", "’": "'", "“": '"', "”": '"',
     "–": "-", "—": "-", "…": "...", " ": " ",
 })
+
+
+TAG_RE = re.compile(r"<[^>]+>")
+
+
+def html_to_text(html: str) -> str:
+    return SPACES_RE.sub(" ", unescape(TAG_RE.sub(" ", html))).strip()
 
 
 class FileServiceError(Exception):
@@ -63,7 +72,23 @@ class FileService(LoggerMixin):
             raise FileServiceError(f"Decoded document is not a PDF: {path.name}")
         return self.save_bytes(path, data)
 
-    def save_text_as_pdf(self, path: Path, title: str, body: str, is_html: bool = False) -> Path:
+    def save_text_as_pdf(
+        self,
+        path: Path,
+        title: str,
+        body: str,
+        is_html: bool = False,
+        meta: Sequence[str] = (),
+    ) -> Path:
+        if is_html:
+            try:
+                return self.save_bytes(path, self._render_pdf(title, body, True, meta))
+            except Exception as exc:
+                self.logger.warning("HTML render failed for %s (%s), using plain text", path.name, exc)
+                body = html_to_text(body)
+        return self.save_bytes(path, self._render_pdf(title, body, False, meta))
+
+    def _render_pdf(self, title: str, body: str, is_html: bool, meta: Sequence[str]) -> bytes:
         pdf = FPDF(format="A4")
         pdf.set_auto_page_break(auto=True, margin=15)
         pdf.add_page()
@@ -71,6 +96,10 @@ class FileService(LoggerMixin):
 
         pdf.set_font("Helvetica", style="B", size=13)
         pdf.multi_cell(0, 7, self._to_latin1(title), new_x="LMARGIN", new_y="NEXT")
+        if meta:
+            pdf.set_font("Helvetica", size=9)
+            for line in meta:
+                pdf.multi_cell(0, 5, self._to_latin1(line), new_x="LMARGIN", new_y="NEXT")
         pdf.ln(4)
 
         pdf.set_font("Helvetica", size=11)
@@ -78,8 +107,7 @@ class FileService(LoggerMixin):
             pdf.write_html(self._to_latin1(body))
         else:
             pdf.multi_cell(0, 6, self._to_latin1(body))
-
-        return self.save_bytes(path, bytes(pdf.output()))
+        return bytes(pdf.output())
 
     @staticmethod
     def _to_latin1(text: str) -> str:
