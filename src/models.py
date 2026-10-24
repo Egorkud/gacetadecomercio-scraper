@@ -25,6 +25,18 @@ class Category:
 
 
 @dataclass(slots=True)
+class SearchResult:
+    """Page of POST publicaciones: total matches and up to `limite` raw rows."""
+
+    total: int
+    rows: list[dict[str, Any]]
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> Self:
+        return cls(total=int(data["total"]), rows=data["filas"])
+
+
+@dataclass(slots=True)
 class Publication:
     """Row of the publication list."""
 

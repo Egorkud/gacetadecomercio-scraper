@@ -11,7 +11,7 @@ from src.config import Settings
 from src.csv_service import CsvService
 from src.failed_registry import FailedRegistry
 from src.file_service import FileService, FileServiceError
-from src.models import Category, CsvRecord, Publication, PublicationDetail, parse_date
+from src.models import Category, CsvRecord, Publication, PublicationDetail, SearchResult, parse_date
 from src.scraper import BaseScraper, HttpError, ScraperError
 
 # Types offered by the site's "Publicación" dropdown (POST publicaciones/catalogos/lista).
@@ -58,12 +58,6 @@ ALL_PUBLICATION_TYPES: dict[str, str] = TASK_PUBLICATION_TYPES | HIDDEN_PUBLICAT
 
 # These never carry a PDF; their list `resumen` equals the detail `textoCompleto`.
 TEXT_PUBLICATION_TYPES: frozenset[str] = frozenset({"2001", "2002", "2004", "2005", "2006", "2007"})
-
-
-@dataclass(slots=True)
-class SearchResult:
-    total: int
-    rows: list[dict[str, Any]]
 
 
 @dataclass(slots=True)
@@ -216,7 +210,7 @@ class GacetaScraper(BaseScraper):
             "pagina": page,
         }
         data = self._api_post("publicaciones", payload)
-        return SearchResult(total=int(data["total"]), rows=data["filas"])
+        return SearchResult.from_api(data)
 
     def get_detail(self, publication_id: str, category: Category) -> PublicationDetail:
         return PublicationDetail.from_api(self._api_get(f"publicaciones/{publication_id}"), category)
