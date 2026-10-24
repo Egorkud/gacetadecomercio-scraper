@@ -61,37 +61,34 @@ class BaseScraper(LoggerMixin):
         return self.parse_json(self.post(url, json=json, **kwargs))
 
     def request(self, method: str, url: str, **kwargs: Any) -> Response:
+        """Throttled request, retried on network errors, Cloudflare blocks and 5xx."""
         url = self.build_url(url)
         kwargs.setdefault("timeout", self.settings.timeout)
+        retries = self.settings.max_retries
         reason = ""
 
-        for attempt in range(1, self.settings.max_retries + 1):
+        for attempt in range(1, retries + 1):
             self._throttle()
             try:
                 response = self.session.request(method, url, **kwargs)
             except RequestException as exc:
-                reason = f"{type(exc).__name__}: {exc}"
-                delay = self._backoff(attempt)
+                reason, delay = f"{type(exc).__name__}: {exc}", self._backoff(attempt)
             else:
                 if response.ok and not self._is_challenge(response):
                     self.logger.debug("%s %s -> %s", method, url, response.status_code)
                     return response
                 if not response.ok and response.status_code not in RETRYABLE_STATUSES:
                     raise HttpError(response.status_code, url, response.text)
-                reason = f"HTTP {response.status_code}"
+                reason = "Cloudflare challenge" if response.ok else f"HTTP {response.status_code}"
                 delay = self._retry_delay(response, attempt)
 
-            if attempt == self.settings.max_retries:
-                break
-            self.logger.warning(
-                "%s %s failed (%s), retry %d/%d in %.0fs",
-                method, url, reason, attempt, self.settings.max_retries - 1, delay,
-            )
-            time.sleep(delay)
+            if attempt < retries:
+                self.logger.warning(
+                    "%s %s failed (%s), retry %d/%d in %.0fs", method, url, reason, attempt, retries - 1, delay,
+                )
+                time.sleep(delay)
 
-        raise RequestFailedError(
-            f"{method} {url} failed after {self.settings.max_retries} attempts: {reason}"
-        )
+        raise RequestFailedError(f"{method} {url} failed after {retries} attempts: {reason}")
 
     def parse_json(self, response: Response) -> Any:
         try:
@@ -114,6 +111,7 @@ class BaseScraper(LoggerMixin):
         return min(self.settings.backoff_base * 2 ** (attempt - 1), self.settings.backoff_max)
 
     def _retry_delay(self, response: Response, attempt: int) -> float:
+        """Follow Retry-After when given; a ban longer than max_retry_after is not waited out."""
         retry_after = response.headers.get("retry-after")
         if retry_after and retry_after.isdigit():
             seconds = float(retry_after)

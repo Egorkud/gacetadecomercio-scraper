@@ -13,13 +13,13 @@ from src.logger import LoggerMixin
 QUOTES_RE = re.compile(r"[\"“”«»]")
 INVALID_CHARS_RE = re.compile(r"[<>:/\\|?*\x00-\x1f]")
 SPACES_RE = re.compile(r"\s+")
+TAG_RE = re.compile(r"<[^>]+>")
+
+# Built-in PDF fonts only cover latin-1, which is enough for Spanish once these are replaced.
 TYPOGRAPHIC_CHARS = str.maketrans({
     "‘": "'", "’": "'", "“": '"', "”": '"',
-    "–": "-", "—": "-", "…": "...", " ": " ",
+    "–": "-", "—": "-", "…": "...", " ": " ",
 })
-
-
-TAG_RE = re.compile(r"<[^>]+>")
 
 
 def html_to_text(html: str) -> str:
@@ -32,40 +32,22 @@ class FileServiceError(Exception):
 
 class FileService(LoggerMixin):
     MAX_STEM_LENGTH = 180
+    MAX_DIR_LENGTH = 100
 
     def __init__(self, files_dir: Path) -> None:
         self.files_dir = files_dir
 
-    @staticmethod
-    def clean(value: str) -> str:
-        return INVALID_CHARS_RE.sub("-", QUOTES_RE.sub("", value)).strip()
-
-    @classmethod
-    def sanitize(cls, value: str, max_length: int | None = None) -> str:
-        value = SPACES_RE.sub(" ", cls.clean(value)).strip(" .")
-        if max_length:
-            value = value[:max_length].rstrip(" .")
-        return value or "unknown"
-
     def build_filename(self, *parts: str, extension: str = "pdf") -> str:
-        stem = "_".join(self.clean(part) for part in parts if part)
-        return f"{self.sanitize(stem, self.MAX_STEM_LENGTH)}.{extension}"
+        """Join non-empty parts with "_", e.g. "COMPANY S.A._123_456-2026.pdf"."""
+        stem = "_".join(self._clean(part) for part in parts if part)
+        return f"{self._sanitize(stem, self.MAX_STEM_LENGTH)}.{extension}"
 
     def build_path(self, file_name: str, subdir: str | None = None) -> Path:
-        directory = self.files_dir / self.sanitize(subdir, 100) if subdir else self.files_dir
+        directory = self.files_dir / self._sanitize(subdir, self.MAX_DIR_LENGTH) if subdir else self.files_dir
         return directory / file_name
 
     def exists(self, path: Path) -> bool:
         return path.is_file() and path.stat().st_size > 0
-
-    def save_bytes(self, path: Path, data: bytes) -> Path:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # Write to a temp file first so an interrupted run never leaves a partial file.
-        tmp_path = path.with_name(f"{path.name}.part")
-        tmp_path.write_bytes(data)
-        os.replace(tmp_path, path)
-        self.logger.debug("Saved %s (%d bytes)", path, len(data))
-        return path
 
     def save_base64_pdf(self, path: Path, document_b64: str) -> Path:
         try:
@@ -84,15 +66,35 @@ class FileService(LoggerMixin):
         is_html: bool = False,
         meta: Sequence[str] = (),
     ) -> Path:
+        """Render text into a PDF; HTML that fpdf cannot handle falls back to plain text."""
         if is_html:
             try:
-                return self.save_bytes(path, self._render_pdf(title, body, True, meta))
+                return self.save_bytes(path, self._render_pdf(title, body, meta, is_html=True))
             except Exception as exc:
                 self.logger.warning("HTML render failed for %s (%s), using plain text", path.name, exc)
                 body = html_to_text(body)
-        return self.save_bytes(path, self._render_pdf(title, body, False, meta))
+        return self.save_bytes(path, self._render_pdf(title, body, meta))
 
-    def _render_pdf(self, title: str, body: str, is_html: bool, meta: Sequence[str]) -> bytes:
+    def save_bytes(self, path: Path, data: bytes) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # A temp file first, so an interrupted run never leaves a partial file.
+        tmp_path = path.with_name(f"{path.name}.part")
+        tmp_path.write_bytes(data)
+        os.replace(tmp_path, path)
+        self.logger.debug("Saved %s (%d bytes)", path, len(data))
+        return path
+
+    @staticmethod
+    def _clean(value: str) -> str:
+        return INVALID_CHARS_RE.sub("-", QUOTES_RE.sub("", value)).strip()
+
+    @classmethod
+    def _sanitize(cls, value: str, max_length: int) -> str:
+        # Dots are stripped only at the end, so "S.A." inside a name stays intact.
+        value = SPACES_RE.sub(" ", cls._clean(value)).strip(" .")
+        return value[:max_length].rstrip(" .") or "unknown"
+
+    def _render_pdf(self, title: str, body: str, meta: Sequence[str], is_html: bool = False) -> bytes:
         pdf = FPDF(format="A4")
         pdf.set_auto_page_break(auto=True, margin=15)
         pdf.add_page()
@@ -100,10 +102,9 @@ class FileService(LoggerMixin):
 
         pdf.set_font("Helvetica", style="B", size=13)
         pdf.multi_cell(0, 7, self._to_latin1(title), new_x="LMARGIN", new_y="NEXT")
-        if meta:
-            pdf.set_font("Helvetica", size=9)
-            for line in meta:
-                pdf.multi_cell(0, 5, self._to_latin1(line), new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", size=9)
+        for line in meta:
+            pdf.multi_cell(0, 5, self._to_latin1(line), new_x="LMARGIN", new_y="NEXT")
         pdf.ln(4)
 
         pdf.set_font("Helvetica", size=11)
@@ -115,5 +116,4 @@ class FileService(LoggerMixin):
 
     @staticmethod
     def _to_latin1(text: str) -> str:
-        # Built-in PDF fonts only cover latin-1, which is enough for Spanish.
         return text.translate(TYPOGRAPHIC_CHARS).encode("latin-1", "replace").decode("latin-1")

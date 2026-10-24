@@ -1,7 +1,7 @@
 import json
 import math
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -9,9 +9,9 @@ from typing import Any
 
 from src.config import Settings
 from src.csv_service import CsvService
+from src.failed_registry import FailedRegistry
 from src.file_service import FileService, FileServiceError
 from src.models import Category, CsvRecord, Publication, PublicationDetail, parse_date
-from src.failed_registry import FailedRegistry
 from src.scraper import BaseScraper, HttpError, ScraperError
 
 # Types offered by the site's "Publicación" dropdown (POST publicaciones/catalogos/lista).
@@ -76,6 +76,12 @@ class RunStats:
 
 
 class GacetaScraper(BaseScraper):
+    """Collects publications type by type, newest first.
+
+    The API loses rows when paginating, so every request has to fit into one page:
+    big types go by date windows, and windows that are still too big are split further.
+    """
+
     def __init__(
         self,
         settings: Settings,
@@ -92,46 +98,28 @@ class GacetaScraper(BaseScraper):
         self._failed_this_run: set[str] = set()
 
     def run(self) -> RunStats:
-        date_to = self.settings.date_to or date.today()
         date_from = self.settings.date_from
+        date_to = self.settings.date_to or date.today()
         types = self.select_types()
         self.logger.info("Collecting %d types from %s to %s", len(types), date_from, date_to)
         self.check_catalog()
 
-        # One request per type over the whole range: small types finish here, the rest go by windows.
-        # Rows come newest first, so the first row tells where the type's publications start.
-        large: dict[str, tuple[Category, date]] = {}
-        for category in types:
-            result = self.search(category.code, date_from, date_to)
-            self.logger.info("[%s] %s: %d publications", category.code, category.name, result.total)
-            if result.total > self.settings.page_size:
-                newest = parse_date(result.rows[0]["fechaPublicacionFormato"]) or date_to
-                large[category.code] = (category, newest)
-            else:
-                self._consume(category, iter(result.rows))
-
-        for window_from, window_to in self.iter_windows(date_from, date_to):
-            if not large:
-                break
-            active = {code: item for code, item in large.items() if item[1] >= window_from}
-            if not active:
-                continue
-            self.logger.info("Window %s..%s, %d types left", window_from, window_to, len(active))
-            for code, (category, _) in active.items():
-                if not self._consume(category, self.iter_range(code, window_from, window_to)):
-                    del large[code]
+        large_types = self._collect_small_types(types, date_from, date_to)
+        self._collect_by_windows(large_types, date_from, date_to)
 
         if self._failed_this_run:
-            # Server-side errors can be transient, so give this run's failures one more try.
+            # Server errors are often temporary, so this run's failures get one more try.
             self.retry_failed(self._failed_this_run)
         self.log_summary()
         return self.stats
 
     def retry_failed(self, only_ids: set[str] | None = None) -> RunStats:
-        records = [r for r in self.failed.records() if only_ids is None or r.id in only_ids]
+        """Retry publications from failed.csv: all of them or only `only_ids`."""
+        records = [record for record in self.failed.records() if only_ids is None or record.id in only_ids]
         self.logger.info("Retrying %d failed publications", len(records))
         for record in records:
             name = ALL_PUBLICATION_TYPES.get(record.type_code, f"Tipo {record.type_code}")
+            # failed.csv keeps no text, so even text types go through the detail.
             self.process(record.to_publication(Category(record.type_code, name)), force_detail=True)
         if only_ids is None:
             self.log_summary()
@@ -140,18 +128,79 @@ class GacetaScraper(BaseScraper):
     def select_types(self) -> list[Category]:
         source = ALL_PUBLICATION_TYPES if self.settings.all_types else TASK_PUBLICATION_TYPES
         codes = self.settings.categories or tuple(source)
-        unknown = [code for code in codes if code not in ALL_PUBLICATION_TYPES]
-        if unknown:
+        if unknown := [code for code in codes if code not in ALL_PUBLICATION_TYPES]:
             raise ValueError(f"Unknown publication types: {', '.join(unknown)}")
         return [Category(code, ALL_PUBLICATION_TYPES[code]) for code in codes]
 
     def check_catalog(self) -> None:
+        """Warn if the site catalog no longer matches TASK_PUBLICATION_TYPES."""
         items = self._api_post("publicaciones/catalogos/lista", {"codigo": ""})
         live = {str(item["codigoParametrica"]) for item in items}
         if added := live - TASK_PUBLICATION_TYPES.keys():
             self.logger.warning("Catalog has new types not in TASK_PUBLICATION_TYPES: %s", sorted(added))
         if removed := TASK_PUBLICATION_TYPES.keys() - live:
             self.logger.warning("Types missing from the live catalog: %s", sorted(removed))
+
+    def _collect_small_types(self, types: list[Category], date_from: date, date_to: date) -> dict[Category, date]:
+        """Process types that fit into one page; return the others with their newest publication date."""
+        large_types = {}
+        for category in types:
+            result = self.search(category.code, date_from, date_to)
+            self.logger.info("[%s] %s: %d publications", category.code, category.name, result.total)
+            if result.total <= self.settings.page_size:
+                self._consume(category, result.rows)
+            else:
+                # Rows come newest first, so windows after this date are empty for the type.
+                large_types[category] = parse_date(result.rows[0]["fechaPublicacionFormato"]) or date_to
+        return large_types
+
+    def _collect_by_windows(self, large_types: dict[Category, date], date_from: date, date_to: date) -> None:
+        for window_from, window_to in self._date_ranges(date_from, date_to, self.settings.window_days):
+            if not large_types:
+                return
+            active = [category for category, newest in large_types.items() if newest >= window_from]
+            if not active:
+                continue
+            self.logger.info("Window %s..%s, %d types left", window_from, window_to, len(active))
+            for category in active:
+                if not self._consume(category, self._iter_range(category.code, window_from, window_to)):
+                    del large_types[category]
+
+    def _iter_range(self, type_code: str, date_from: date, date_to: date) -> Iterator[dict[str, Any]]:
+        """Yield rows newest first, splitting the range until each request fits into one page."""
+        result = self.search(type_code, date_from, date_to)
+        if result.total <= self.settings.page_size:
+            yield from result.rows
+            return
+
+        days = (date_to - date_from).days + 1
+        if days == 1:
+            yield from self._paginate_day(type_code, date_from, result)
+            return
+
+        parts = min(days, math.ceil(result.total / self.settings.split_target))
+        self.logger.debug("[%s] %s..%s: %d rows, split into %d", type_code, date_from, date_to, result.total, parts)
+        for part_from, part_to in self._date_ranges(date_from, date_to, math.ceil(days / parts)):
+            yield from self._iter_range(type_code, part_from, part_to)
+
+    def _paginate_day(self, type_code: str, day: date, first: SearchResult) -> Iterator[dict[str, Any]]:
+        """Last resort for a day over one page; rows with one timestamp may repeat or go missing."""
+        rows = {row["id"]: row for row in first.rows}
+        pages = math.ceil(first.total / self.settings.page_size)
+        for page in range(2, pages + 1):
+            rows.update((row["id"], row) for row in self.search(type_code, day, day, page).rows)
+        if len(rows) != first.total:
+            self.logger.warning("[%s] %s: got %d of %d rows via pagination", type_code, day, len(rows), first.total)
+        yield from rows.values()
+
+    @staticmethod
+    def _date_ranges(date_from: date, date_to: date, days: int) -> Iterator[tuple[date, date]]:
+        """Consecutive ranges of `days` days, newest first."""
+        range_to = date_to
+        while range_to >= date_from:
+            range_from = max(date_from, range_to - timedelta(days=days - 1))
+            yield range_from, range_to
+            range_to = range_from - timedelta(days=1)
 
     def search(self, type_code: str, date_from: date, date_to: date, page: int = 1) -> SearchResult:
         payload = {
@@ -170,72 +219,40 @@ class GacetaScraper(BaseScraper):
         return SearchResult(total=int(data["total"]), rows=data["filas"])
 
     def get_detail(self, publication_id: str, category: Category) -> PublicationDetail:
-        data = self._api_get(f"publicaciones/{publication_id}")
-        return PublicationDetail.from_api(data, category)
+        return PublicationDetail.from_api(self._api_get(f"publicaciones/{publication_id}"), category)
 
-    def iter_windows(self, date_from: date, date_to: date) -> Iterator[tuple[date, date]]:
-        window_to = date_to
-        while window_to >= date_from:
-            window_from = max(date_from, window_to - timedelta(days=self.settings.window_days - 1))
-            yield window_from, window_to
-            window_to = window_from - timedelta(days=1)
+    def _api_post(self, url: str, payload: dict[str, Any]) -> Any:
+        return self._unwrap(self.post_json(url, json=payload), url)
 
-    def iter_range(self, type_code: str, date_from: date, date_to: date) -> Iterator[dict[str, Any]]:
-        """Yield rows newest first; ranges over one page are split, so pagination is avoided."""
-        result = self.search(type_code, date_from, date_to)
-        if result.total <= self.settings.page_size:
-            yield from result.rows
-            return
-
-        days = (date_to - date_from).days + 1
-        if days == 1:
-            yield from self._paginate_day(type_code, date_from, result)
-            return
-
-        parts = min(days, math.ceil(result.total / self.settings.split_target))
-        self.logger.debug("[%s] %s..%s: %d rows, split into %d", type_code, date_from, date_to, result.total, parts)
-        for part_from, part_to in self._split(date_from, date_to, parts):
-            yield from self.iter_range(type_code, part_from, part_to)
-
-    def _paginate_day(self, type_code: str, day: date, first: SearchResult) -> Iterator[dict[str, Any]]:
-        # Rows sharing a timestamp are ordered randomly between requests, so pages may overlap or miss rows.
-        rows = {row["id"]: row for row in first.rows}
-        pages = math.ceil(first.total / self.settings.page_size)
-        for page in range(2, pages + 1):
-            rows.update((row["id"], row) for row in self.search(type_code, day, day, page).rows)
-        if len(rows) != first.total:
-            self.logger.warning("[%s] %s: got %d of %d rows via pagination", type_code, day, len(rows), first.total)
-        yield from rows.values()
+    def _api_get(self, url: str) -> Any:
+        return self._unwrap(self.get_json(url), url)
 
     @staticmethod
-    def _split(date_from: date, date_to: date, parts: int) -> list[tuple[date, date]]:
-        days = (date_to - date_from).days + 1
-        size = math.ceil(days / parts)
-        ranges = []
-        part_to = date_to
-        while part_to >= date_from:
-            part_from = max(date_from, part_to - timedelta(days=size - 1))
-            ranges.append((part_from, part_to))
-            part_to = part_from - timedelta(days=1)
-        return ranges
+    def _unwrap(body: dict[str, Any], url: str) -> Any:
+        if not body.get("finalizado"):
+            errors = (body.get("datos") or {}).get("errores") or []
+            raise ScraperError(f"API error for {url}: {body.get('mensaje')} {errors}".strip())
+        return body["datos"]
 
-    def _consume(self, category: Category, rows: Iterator[dict[str, Any]]) -> bool:
-        """Process rows until the per-type limit; return False once the limit is reached."""
-        limit = self.settings.limit_per_type
+    def _consume(self, category: Category, rows: Iterable[dict[str, Any]]) -> bool:
+        """Process new rows of a type; return False once limit_per_type is reached."""
         for row in rows:
-            if limit is not None and self.stats.per_type[category.code] >= limit:
+            if self._limit_reached(category):
                 return False
             if row["id"] in self._seen_ids:
                 continue
             self._seen_ids.add(row["id"])
             self.stats.per_type[category.code] += 1
             self.process(Publication.from_api(row, category))
-        return limit is None or self.stats.per_type[category.code] < limit
+        return not self._limit_reached(category)
+
+    def _limit_reached(self, category: Category) -> bool:
+        limit = self.settings.limit_per_type
+        return limit is not None and self.stats.per_type[category.code] >= limit
 
     def process(self, publication: Publication, force_detail: bool = False) -> None:
-        category = publication.category
-        file_name = self.files.build_filename(publication.company_name, publication.matricula, publication.code)
-        path = self.files.build_path(file_name, f"{category.code} - {category.name}")
+        """Save a publication as PDF and add it to the CSV; failures go to failed.csv."""
+        path = self._file_path(publication)
         if self.files.exists(path):
             self.stats.skipped += 1
             self.failed.remove(publication.id)
@@ -243,32 +260,21 @@ class GacetaScraper(BaseScraper):
             return
 
         try:
-            if category.code in TEXT_PUBLICATION_TYPES and not force_detail:
+            if publication.category.code in TEXT_PUBLICATION_TYPES and not force_detail:
                 self._save_text(path, publication, publication.summary)
             else:
                 self._save_from_detail(path, publication)
         except (ScraperError, FileServiceError) as exc:
-            reason = self._failure_reason(exc)
-            self.stats.failed += 1
-            self._failed_this_run.add(publication.id)
-            self.failed.add(publication, reason)
-            self.logger.error("Failed %s (id %s): %s", publication.code, publication.id, reason)
+            self._mark_failed(publication, exc)
             return
 
         self.failed.remove(publication.id)
-        relative_path = path.relative_to(self.files.files_dir).as_posix()
-        self.csv.write_row(CsvRecord.from_publication(publication, relative_path, datetime.now()).to_row())
+        self._write_csv_row(publication, path)
 
-    @staticmethod
-    def _failure_reason(exc: Exception) -> str:
-        if isinstance(exc, HttpError):
-            try:
-                data = json.loads(exc.body)
-            except ValueError:
-                data = None
-            message = data.get("mensaje") if isinstance(data, dict) else None
-            return f"HTTP {exc.status}: {message or exc.body[:200]}"
-        return str(exc)[:300]
+    def _file_path(self, publication: Publication) -> Path:
+        category = publication.category
+        file_name = self.files.build_filename(publication.company_name, publication.matricula, publication.code)
+        return self.files.build_path(file_name, f"{category.code} - {category.name}")
 
     def _save_from_detail(self, path: Path, publication: Publication) -> None:
         detail = self.get_detail(publication.id, publication.category)
@@ -277,6 +283,7 @@ class GacetaScraper(BaseScraper):
             self.stats.pdf_saved += 1
             self.logger.info("Saved PDF %s", path.name)
             return
+
         if detail.previous_code:
             self.logger.warning("No document for %s (site shows 'temporalmente no disponible')", detail.code)
         if detail.full_text_html:
@@ -295,30 +302,40 @@ class GacetaScraper(BaseScraper):
         self.stats.pdf_generated += 1
         self.logger.info("Generated PDF %s", path.name)
 
+    def _write_csv_row(self, publication: Publication, path: Path) -> None:
+        file_name = path.relative_to(self.files.files_dir).as_posix()
+        self.csv.write_row(CsvRecord.from_publication(publication, file_name, datetime.now()).to_row())
+
+    def _mark_failed(self, publication: Publication, exc: Exception) -> None:
+        reason = self._failure_reason(exc)
+        self.stats.failed += 1
+        self._failed_this_run.add(publication.id)
+        self.failed.add(publication, reason)
+        self.logger.error("Failed %s (id %s): %s", publication.code, publication.id, reason)
+
+    @staticmethod
+    def _failure_reason(exc: Exception) -> str:
+        """Short reason for failed.csv, e.g. "HTTP 412: Error al obtener el archivo"."""
+        if not isinstance(exc, HttpError):
+            return str(exc)[:300]
+        try:
+            data = json.loads(exc.body)
+        except ValueError:
+            data = None
+        message = data.get("mensaje") if isinstance(data, dict) else None
+        return f"HTTP {exc.status}: {message or exc.body[:200]}"
+
     def log_summary(self) -> None:
-        s = self.stats
+        stats = self.stats
         self.logger.info(
             "Done: %d PDFs saved, %d generated, %d skipped, %d failed attempts",
-            s.pdf_saved, s.pdf_generated, s.skipped, s.failed,
+            stats.pdf_saved, stats.pdf_generated, stats.skipped, stats.failed,
         )
-        for code, count in sorted(s.per_type.items()):
+        for code, count in sorted(stats.per_type.items()):
             self.logger.info("  [%s] %d publications", code, count)
         if len(self.failed):
-            still_failed = sum(pid in self.failed for pid in self._failed_this_run)
+            still_failed = sum(publication_id in self.failed for publication_id in self._failed_this_run)
             self.logger.warning(
                 "%d publications of this run are unavailable on the server, %d in total; see %s",
                 still_failed, len(self.failed), self.failed.path,
             )
-
-    def _api_post(self, url: str, payload: dict[str, Any]) -> Any:
-        return self._unwrap(self.post_json(url, json=payload), url)
-
-    def _api_get(self, url: str) -> Any:
-        return self._unwrap(self.get_json(url), url)
-
-    @staticmethod
-    def _unwrap(body: dict[str, Any], url: str) -> Any:
-        if not body.get("finalizado"):
-            errors = (body.get("datos") or {}).get("errores") or []
-            raise ScraperError(f"API error for {url}: {body.get('mensaje')} {errors}".strip())
-        return body["datos"]

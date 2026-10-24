@@ -26,6 +26,8 @@ class Category:
 
 @dataclass(slots=True)
 class Publication:
+    """Row of the publication list."""
+
     id: str
     code: str
     title: str
@@ -60,6 +62,8 @@ class Publication:
 
 @dataclass(slots=True)
 class PublicationDetail(Publication):
+    """Response of GET publicaciones/{id}; `documento` is a base64 PDF."""
+
     previous_code: str | None = None
     full_text_html: str | None = None
     archive_path: str | None = None
@@ -83,6 +87,8 @@ class PublicationDetail(Publication):
 
 @dataclass(slots=True)
 class FailedRecord:
+    """Row of failed.csv."""
+
     id: str
     type_code: str
     code: str
@@ -135,6 +141,8 @@ class FailedRecord:
 
 @dataclass(frozen=True, slots=True)
 class CsvRecord:
+    """Row of the result CSV required by the task."""
+
     company_name: str
     matricula: str
     publication_date: str

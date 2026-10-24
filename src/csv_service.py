@@ -47,6 +47,7 @@ class CsvService(LoggerMixin):
     def open(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         is_new = not self.path.exists() or self.path.stat().st_size == 0
+        # The BOM goes only at the start of a new file, appends use plain utf-8.
         self._file = self.path.open("a", encoding=self.ENCODING if is_new else "utf-8", newline="")
         self._writer = csv.DictWriter(self._file, fieldnames=self.fieldnames, extrasaction="ignore")
         if is_new:

@@ -1,6 +1,5 @@
 import argparse
 import logging
-from dataclasses import replace
 from datetime import date, datetime, timedelta
 
 from src.config import Settings
@@ -32,20 +31,20 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_settings(args: argparse.Namespace) -> Settings:
-    settings = Settings(
-        date_to=args.date_to,
-        limit_per_type=args.limit,
-        categories=tuple(args.categories),
-        all_types=args.all_types,
-        log_level=args.log_level,
-    )
+    options = {
+        "date_to": args.date_to,
+        "limit_per_type": args.limit,
+        "categories": tuple(args.categories),
+        "all_types": args.all_types,
+        "log_level": args.log_level,
+    }
     if args.date_from is not None:
-        settings = replace(settings, date_from=args.date_from)
+        options["date_from"] = args.date_from
     if args.days is not None:
-        settings = replace(settings, date_from=(args.date_to or date.today()) - timedelta(days=args.days - 1))
+        options["date_from"] = (args.date_to or date.today()) - timedelta(days=args.days - 1)
     if args.min_interval is not None:
-        settings = replace(settings, min_request_interval=args.min_interval)
-    return settings
+        options["min_request_interval"] = args.min_interval
+    return Settings(**options)
 
 
 def main() -> None:
@@ -61,12 +60,14 @@ def main() -> None:
     file_service = FileService(settings.files_dir)
     failed = FailedRegistry(settings.failed_path)
     try:
-        with CsvService(csv_path, CsvRecord.fieldnames()) as csv_service:
-            with GacetaScraper(settings, csv_service, file_service, failed) as scraper:
-                if args.retry_failed:
-                    scraper.retry_failed()
-                else:
-                    scraper.run()
+        with (
+            CsvService(csv_path, CsvRecord.fieldnames()) as csv_service,
+            GacetaScraper(settings, csv_service, file_service, failed) as scraper,
+        ):
+            if args.retry_failed:
+                scraper.retry_failed()
+            else:
+                scraper.run()
     except KeyboardInterrupt:
         logger.warning("Interrupted by user, progress is saved")
 

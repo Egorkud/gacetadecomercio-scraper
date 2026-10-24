@@ -27,7 +27,6 @@ DEFAULT_HEADERS: dict[str, str] = {
 
 @dataclass(frozen=True, slots=True)
 class Settings:
-    site_url: str = "https://gacetadecomercio.gob.bo"
     api_base_url: str = "https://servicios.seprec.gob.bo/api"
 
     # TLS fingerprint matches the Firefox User-Agent in DEFAULT_HEADERS.
