@@ -45,6 +45,7 @@ class Settings:
     date_to: date | None = None
     window_days: int = 30
     split_target: int = 70  # expected rows per request when a range is split
+    pagination_rounds: int = 10  # passes over a single day that does not fit into one page
 
     limit_per_type: int | None = None
     categories: tuple[str, ...] = ()
