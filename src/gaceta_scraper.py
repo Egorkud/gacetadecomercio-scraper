@@ -193,17 +193,20 @@ class GacetaScraper(BaseScraper):
             rounds += 1
             # The first page of round 1 is the request that found the day too big.
             for page in range(2 if rounds == 1 else 1, pages + 1):
-                rows.update((row["id"], row) for row in self.search(type_code, day, day, page).rows)
+                page_rows = self.search(type_code, day, day, page).rows
+                if not page_rows:
+                    break  # past the real data, whatever total the API reported
+                rows.update((row["id"], row) for row in page_rows)
                 if len(rows) >= first.total:
                     break
 
-        if len(rows) < first.total:
+        if len(rows) != first.total:
             self.logger.warning(
                 "[%s] %s: got %d of %d rows via pagination after %d rounds",
                 type_code, day, len(rows), first.total, rounds,
             )
         else:
-            self.logger.info("[%s] %s: %d rows via pagination, %d rounds", type_code, day, first.total, rounds)
+            self.logger.info("[%s] %s: %d rows via pagination, %d rounds", type_code, day, len(rows), rounds)
         yield from rows.values()
 
     @staticmethod
