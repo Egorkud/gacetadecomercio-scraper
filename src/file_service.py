@@ -1,29 +1,13 @@
 import base64
 import binascii
 import os
-import re
 from collections.abc import Sequence
-from html import unescape
 from pathlib import Path
 
 from fpdf import FPDF
 
+from src.helpers.utils import clean_filename_part, html_to_text, safe_filename, to_latin1
 from src.logger import LoggerMixin
-
-QUOTES_RE = re.compile(r"[\"“”«»]")
-INVALID_CHARS_RE = re.compile(r"[<>:/\\|?*\x00-\x1f]")
-SPACES_RE = re.compile(r"\s+")
-TAG_RE = re.compile(r"<[^>]+>")
-
-# Built-in PDF fonts only cover latin-1, which is enough for Spanish once these are replaced.
-TYPOGRAPHIC_CHARS = str.maketrans({
-    "‘": "'", "’": "'", "“": '"', "”": '"',
-    "–": "-", "—": "-", "…": "...", " ": " ",
-})
-
-
-def html_to_text(html: str) -> str:
-    return SPACES_RE.sub(" ", unescape(TAG_RE.sub(" ", html))).strip()
 
 
 class FileServiceError(Exception):
@@ -39,12 +23,21 @@ class FileService(LoggerMixin):
 
     def build_filename(self, *parts: str, extension: str = "pdf") -> str:
         """Join non-empty parts with "_", e.g. "COMPANY S.A._123_456-2026.pdf"."""
-        stem = "_".join(self._clean(part) for part in parts if part)
-        return f"{self._sanitize(stem, self.MAX_STEM_LENGTH)}.{extension}"
+        stem = "_".join(clean_filename_part(part) for part in parts if part)
+        return f"{safe_filename(stem, self.MAX_STEM_LENGTH)}.{extension}"
 
     def build_path(self, file_name: str, subdir: str | None = None) -> Path:
-        directory = self.files_dir / self._sanitize(subdir, self.MAX_DIR_LENGTH) if subdir else self.files_dir
+        directory = self.files_dir / safe_filename(subdir, self.MAX_DIR_LENGTH) if subdir else self.files_dir
         return directory / file_name
+
+    @staticmethod
+    def type_folder(code: str, name: str) -> str:
+        return f"{code} - {name}"
+
+    @staticmethod
+    def type_code(file_name: str) -> str:
+        """Type code of a file name relative to files_dir: "1009 - Name/file.pdf" -> "1009"."""
+        return file_name.split("/", 1)[0].split(" - ", 1)[0]
 
     def exists(self, path: Path) -> bool:
         return path.is_file() and path.stat().st_size > 0
@@ -84,36 +77,22 @@ class FileService(LoggerMixin):
         self.logger.debug("Saved %s (%d bytes)", path, len(data))
         return path
 
-    @staticmethod
-    def _clean(value: str) -> str:
-        return INVALID_CHARS_RE.sub("-", QUOTES_RE.sub("", value)).strip()
-
-    @classmethod
-    def _sanitize(cls, value: str, max_length: int) -> str:
-        # Dots are stripped only at the end, so "S.A." inside a name stays intact.
-        value = SPACES_RE.sub(" ", cls._clean(value)).strip(" .")
-        return value[:max_length].rstrip(" .") or "unknown"
-
     def _render_pdf(self, title: str, body: str, meta: Sequence[str], is_html: bool = False) -> bytes:
         pdf = FPDF(format="A4")
         pdf.set_auto_page_break(auto=True, margin=15)
         pdf.add_page()
-        pdf.set_title(self._to_latin1(title))
+        pdf.set_title(to_latin1(title))
 
         pdf.set_font("Helvetica", style="B", size=13)
-        pdf.multi_cell(0, 7, self._to_latin1(title), new_x="LMARGIN", new_y="NEXT")
+        pdf.multi_cell(0, 7, to_latin1(title), new_x="LMARGIN", new_y="NEXT")
         pdf.set_font("Helvetica", size=9)
         for line in meta:
-            pdf.multi_cell(0, 5, self._to_latin1(line), new_x="LMARGIN", new_y="NEXT")
+            pdf.multi_cell(0, 5, to_latin1(line), new_x="LMARGIN", new_y="NEXT")
         pdf.ln(4)
 
         pdf.set_font("Helvetica", size=11)
         if is_html:
-            pdf.write_html(self._to_latin1(body))
+            pdf.write_html(to_latin1(body))
         else:
-            pdf.multi_cell(0, 6, self._to_latin1(body))
+            pdf.multi_cell(0, 6, to_latin1(body))
         return bytes(pdf.output())
-
-    @staticmethod
-    def _to_latin1(text: str) -> str:
-        return text.translate(TYPOGRAPHIC_CHARS).encode("latin-1", "replace").decode("latin-1")

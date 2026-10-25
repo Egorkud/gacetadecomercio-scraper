@@ -1,7 +1,5 @@
-import re
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Self
 from urllib.parse import urlsplit
@@ -11,6 +9,7 @@ from curl_cffi.requests import Response
 from curl_cffi.requests.exceptions import RequestException
 
 from src.config import Settings
+from src.helpers.utils import slugify, timestamp
 from src.logger import LoggerMixin
 
 RETRYABLE_STATUSES = frozenset({403, 429, 500, 502, 503, 504})
@@ -150,8 +149,8 @@ class BaseScraper(LoggerMixin):
 
     def _save_response(self, response: Response) -> Path:
         """Keep a broken response in full; it can be megabytes of base64, too big for a log line."""
-        name = re.sub(r"\W+", "-", urlsplit(response.url).path).strip("-")
-        path = self.settings.logs_dir / "responses" / f"{datetime.now():%Y-%m-%d_%H-%M-%S-%f}_{name}.txt"
+        name = slugify(urlsplit(response.url).path)
+        path = self.settings.logs_dir / "responses" / f"{timestamp(precise=True)}_{name}.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(response.content)
         return path

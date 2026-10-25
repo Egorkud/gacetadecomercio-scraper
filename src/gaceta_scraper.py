@@ -4,7 +4,7 @@ import threading
 from collections import Counter
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +13,8 @@ from src.csv_service import CsvService
 from src.download_pool import DownloadPool
 from src.failed_registry import FailedRegistry
 from src.file_service import FileService, FileServiceError
-from src.models import Category, CsvRecord, MetadataRecord, Publication, PublicationDetail, SearchResult, parse_date
+from src.helpers.utils import date_ranges, parse_date
+from src.models import Category, CsvRecord, MetadataRecord, Publication, PublicationDetail, SearchResult
 from src.scraper import BaseScraper, HttpError, RateLimiter, ScraperError
 
 # Types offered by the site's "Publicación" dropdown (POST publicaciones/catalogos/lista).
@@ -194,7 +195,7 @@ class GacetaScraper(BaseScraper):
         return large_types
 
     def _collect_by_windows(self, large_types: dict[Category, date], date_from: date, date_to: date) -> None:
-        for window_from, window_to in self._date_ranges(date_from, date_to, self.settings.window_days):
+        for window_from, window_to in date_ranges(date_from, date_to, self.settings.window_days):
             if not large_types:
                 return
             active = [category for category, newest in large_types.items() if newest >= window_from]
@@ -219,7 +220,7 @@ class GacetaScraper(BaseScraper):
 
         parts = min(days, math.ceil(result.total / self.settings.split_target))
         self.logger.debug("[%s] %s..%s: %d rows, split into %d", type_code, date_from, date_to, result.total, parts)
-        for part_from, part_to in self._date_ranges(date_from, date_to, math.ceil(days / parts)):
+        for part_from, part_to in date_ranges(date_from, date_to, math.ceil(days / parts)):
             yield from self._iter_range(type_code, part_from, part_to)
 
     def _paginate_day(self, type_code: str, day: date, first: SearchResult) -> Iterator[dict[str, Any]]:
@@ -250,15 +251,6 @@ class GacetaScraper(BaseScraper):
         else:
             self.logger.info("[%s] %s: %d rows via pagination, %d rounds", type_code, day, len(rows), rounds)
         yield from rows.values()
-
-    @staticmethod
-    def _date_ranges(date_from: date, date_to: date, days: int) -> Iterator[tuple[date, date]]:
-        """Consecutive ranges of `days` days, newest first."""
-        range_to = date_to
-        while range_to >= date_from:
-            range_from = max(date_from, range_to - timedelta(days=days - 1))
-            yield range_from, range_to
-            range_to = range_from - timedelta(days=1)
 
     def search(self, type_code: str, date_from: date, date_to: date, page: int = 1) -> SearchResult:
         payload = {
@@ -343,7 +335,7 @@ class GacetaScraper(BaseScraper):
     def _file_path(self, publication: Publication) -> Path:
         category = publication.category
         file_name = self.files.build_filename(publication.company_name, publication.matricula, publication.code)
-        return self.files.build_path(file_name, f"{category.code} - {category.name}")
+        return self.files.build_path(file_name, self.files.type_folder(category.code, category.name))
 
     def _save_from_detail(self, path: Path, publication: Publication) -> None:
         detail = self.get_detail(publication.id, publication.category)

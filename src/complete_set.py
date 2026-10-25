@@ -4,6 +4,7 @@ from datetime import datetime
 from src.config import Settings
 from src.csv_service import CsvService
 from src.failed_registry import FailedRegistry
+from src.file_service import FileService
 from src.logger import LoggerMixin
 from src.models import CsvRecord, MetadataRecord
 
@@ -133,8 +134,7 @@ class CompleteSetBuilder(LoggerMixin):
         """Downloaded files of types covered by metadata must have the same name there."""
         covered_types = {record.type_code for record in metadata.values()}
         for file_name in complete:
-            type_code = file_name.split("/", 1)[0].split(" - ", 1)[0]  # "1009 - Name/file.pdf"
-            if file_name not in metadata and type_code in covered_types:
+            if file_name not in metadata and FileService.type_code(file_name) in covered_types:
                 self.report.not_in_metadata += 1
                 # Usually a file saved under an older naming rule; it would be downloaded again.
                 self.logger.warning("%s: downloaded file is not in metadata", file_name)

@@ -2,16 +2,20 @@ from dataclasses import asdict, dataclass, fields
 from datetime import date, datetime
 from typing import Any, Self
 
+from src.helpers.utils import format_date, parse_date
 
-def parse_date(value: str | None) -> date | None:
-    if not value:
-        return None
-    for fmt in ("%Y/%m/%d", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(value[:10], fmt).date()
-        except ValueError:
-            continue
-    return None
+
+class CsvRow:
+    """Fieldnames and row dict for dataclasses stored in CSV files."""
+
+    __slots__ = ()
+
+    @classmethod
+    def fieldnames(cls) -> list[str]:
+        return [f.name for f in fields(cls)]
+
+    def to_row(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +102,7 @@ class PublicationDetail(Publication):
 
 
 @dataclass(slots=True)
-class FailedRecord:
+class FailedRecord(CsvRow):
     """Row of failed.csv."""
 
     id: str
@@ -112,9 +116,6 @@ class FailedRecord:
     failed_at: str
     attempts: int = 1
 
-    @classmethod
-    def fieldnames(cls) -> list[str]:
-        return [f.name for f in fields(cls)]
 
     @classmethod
     def from_publication(cls, publication: Publication, reason: str, failed_at: datetime) -> Self:
@@ -125,7 +126,7 @@ class FailedRecord:
             company_name=publication.company_name,
             matricula=publication.matricula,
             matricula_anterior=publication.matricula_anterior or "",
-            publication_date=publication.published_at.isoformat() if publication.published_at else "",
+            publication_date=format_date(publication.published_at),
             reason=reason,
             failed_at=failed_at.isoformat(timespec="seconds"),
         )
@@ -147,12 +148,9 @@ class FailedRecord:
             category=category,
         )
 
-    def to_row(self) -> dict[str, Any]:
-        return asdict(self)
-
 
 @dataclass(frozen=True, slots=True)
-class CsvRecord:
+class CsvRecord(CsvRow):
     """Row of the result CSV required by the task."""
 
     company_name: str
@@ -161,26 +159,20 @@ class CsvRecord:
     file_name: str
     scraped_at: str
 
-    @classmethod
-    def fieldnames(cls) -> list[str]:
-        return [f.name for f in fields(cls)]
 
     @classmethod
     def from_publication(cls, publication: Publication, file_name: str, scraped_at: datetime) -> Self:
         return cls(
             company_name=publication.company_name,
             matricula=publication.matricula_display,
-            publication_date=publication.published_at.isoformat() if publication.published_at else "",
+            publication_date=format_date(publication.published_at),
             file_name=file_name,
             scraped_at=scraped_at.isoformat(timespec="seconds"),
         )
 
-    def to_row(self) -> dict[str, str]:
-        return asdict(self)
-
 
 @dataclass(frozen=True, slots=True)
-class MetadataRecord:
+class MetadataRecord(CsvRow):
     """Row of metadata.csv: every publication without downloading it, to prove the collection is complete."""
 
     id: str
@@ -195,9 +187,6 @@ class MetadataRecord:
     file_name: str
     scraped_at: str
 
-    @classmethod
-    def fieldnames(cls) -> list[str]:
-        return [f.name for f in fields(cls)]
 
     @classmethod
     def from_publication(cls, publication: Publication, file_name: str, scraped_at: datetime) -> Self:
@@ -207,7 +196,7 @@ class MetadataRecord:
             type_code=category.code if category else "",
             type_name=category.name if category else "",
             code=publication.code,
-            publication_date=publication.published_at.isoformat() if publication.published_at else "",
+            publication_date=format_date(publication.published_at),
             company_name=publication.company_name,
             matricula=publication.matricula,
             matricula_anterior=publication.matricula_anterior or "",
@@ -232,6 +221,3 @@ class MetadataRecord:
             matricula_anterior=self.matricula_anterior or None,
             category=Category(self.type_code, self.type_name),
         )
-
-    def to_row(self) -> dict[str, str]:
-        return asdict(self)

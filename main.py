@@ -1,6 +1,6 @@
 import argparse
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from src.complete_set import CompleteSetBuilder
 from src.config import Settings
@@ -8,17 +8,9 @@ from src.csv_service import CsvService
 from src.failed_registry import FailedRegistry
 from src.file_service import FileService
 from src.gaceta_scraper import GacetaScraper
+from src.helpers.utils import positive_int, timestamp
 from src.logger import setup_logging
 from src.models import CsvRecord, MetadataRecord
-
-RUN_ID_FORMAT = "%Y-%m-%d_%H-%M-%S"
-
-
-def positive_int(value: str) -> int:
-    number = int(value)
-    if number < 1:
-        raise argparse.ArgumentTypeError("must be at least 1")
-    return number
 
 
 def parse_args() -> argparse.Namespace:
@@ -66,7 +58,7 @@ def build_settings(args: argparse.Namespace) -> Settings:
 def main() -> None:
     args = parse_args()
     settings = build_settings(args)
-    run_id = datetime.now().strftime(RUN_ID_FORMAT)
+    run_id = timestamp()
 
     setup_logging(settings.logs_dir / f"scraper_{run_id}.log", settings.log_level)
     logger = logging.getLogger("main")
