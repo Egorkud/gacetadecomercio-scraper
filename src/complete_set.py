@@ -20,6 +20,7 @@ class MergeReport:
     files_missing: int = 0
     files_broken: int = 0
     orphans_restored: int = 0
+    not_in_metadata: int = 0
     added_to_failed: int = 0
     metadata_rows: int = 0
     not_downloaded: int = 0
@@ -50,6 +51,8 @@ class CompleteSetBuilder(LoggerMixin):
                 complete[file_name] = row
         self.report.files_ok = len(complete)
         self._restore_orphans(complete, metadata)
+        if metadata:
+            self._check_names(complete, metadata)
 
         newest_first = sorted(complete.values(), key=lambda r: (r["publication_date"], r["file_name"]), reverse=True)
         CsvService.rewrite(self.settings.complete_path, CsvRecord.fieldnames(), newest_first)
@@ -126,6 +129,16 @@ class CompleteSetBuilder(LoggerMixin):
                 self.report.unknown.append(file_name)
                 self.logger.warning("%s: file has no CSV row and no metadata", file_name)
 
+    def _check_names(self, complete: dict[str, dict[str, str]], metadata: dict[str, MetadataRecord]) -> None:
+        """Downloaded files of types covered by metadata must have the same name there."""
+        covered_types = {record.type_code for record in metadata.values()}
+        for file_name in complete:
+            type_code = file_name.split("/", 1)[0].split(" - ", 1)[0]  # "1009 - Name/file.pdf"
+            if file_name not in metadata and type_code in covered_types:
+                self.report.not_in_metadata += 1
+                # Usually a file saved under an older naming rule; it would be downloaded again.
+                self.logger.warning("%s: downloaded file is not in metadata", file_name)
+
     def _write_missing(self, complete: dict[str, dict[str, str]], metadata: dict[str, MetadataRecord]) -> None:
         missing = [record.to_row() for file_name, record in metadata.items() if file_name not in complete]
         self.report.not_downloaded = len(missing)
@@ -149,6 +162,8 @@ class CompleteSetBuilder(LoggerMixin):
             )
         else:
             self.logger.info("No metadata_*.csv found, completeness against the API is not checked")
+        if report.not_in_metadata:
+            self.logger.warning("%d downloaded files are not in metadata, see the warnings above", report.not_in_metadata)
         if report.unknown:
             self.logger.warning("%d files could not be matched, see the warnings above", len(report.unknown))
         self.logger.info("Complete set saved to %s", self.settings.complete_path)

@@ -98,7 +98,8 @@ def metadata_record(publication_id: str, name: str) -> MetadataRecord:
 
 
 def check_complete_set() -> None:
-    """good is in two runs, missing has no file, broken is not a PDF, orphan has no CSV row."""
+    """good is in two runs, missing has no file, broken is not a PDF, orphan has no CSV row,
+    renamed was saved under an old name that metadata does not know."""
     settings = Settings(output_dir=OUTPUT_DIR / "merge")
     names = ("good", "missing", "broken", "orphan", "not_downloaded")
     records = {name: metadata_record(str(number), name) for number, name in enumerate(names, start=1)}
@@ -108,6 +109,7 @@ def check_complete_set() -> None:
     (files_dir / "good.pdf").write_bytes(b"%PDF-1.4")
     (files_dir / "orphan.pdf").write_bytes(b"%PDF-1.4")
     (files_dir / "broken.pdf").write_bytes(b"<html>")
+    (files_dir / "-renamed-.pdf").write_bytes(b"%PDF-1.4")
 
     def run_row(name: str, scraped_at: str) -> dict[str, str]:
         publication = records[name].to_publication()
@@ -115,6 +117,7 @@ def check_complete_set() -> None:
                 "scraped_at": scraped_at}
 
     first_run = [run_row(name, "2026-10-24T10:00:00") for name in ("good", "missing", "broken")]
+    first_run.append({**first_run[0], "file_name": "1009/-renamed-.pdf"})
     CsvService.rewrite(settings.output_dir / "publications_1.csv", CsvRecord.fieldnames(), first_run)
     CsvService.rewrite(settings.output_dir / "publications_2.csv", CsvRecord.fieldnames(),
                        [run_row("good", "2026-10-24T11:00:00")])
@@ -125,13 +128,14 @@ def check_complete_set() -> None:
     report = CompleteSetBuilder(settings, failed).build()
 
     complete = {row["file_name"]: row for row in CsvService.read_rows(settings.complete_path)}
-    assert set(complete) == {"1009/good.pdf", "1009/orphan.pdf"}, complete
+    assert set(complete) == {"1009/good.pdf", "1009/orphan.pdf", "1009/-renamed-.pdf"}, complete
     assert complete["1009/good.pdf"]["scraped_at"] == "2026-10-24T11:00:00"
     assert {record.id for record in failed.records()} == {"2", "3"}
     assert (files_dir / "broken.pdf.broken").exists() and not (files_dir / "broken.pdf").exists()
     missing = {row["file_name"] for row in CsvService.read_rows(settings.missing_path)}
     assert missing == {"1009/missing.pdf", "1009/broken.pdf", "1009/not_downloaded.pdf"}, missing
-    assert (report.rows_read, report.unique_rows, report.orphans_restored) == (4, 3, 1)
+    assert (report.rows_read, report.unique_rows, report.orphans_restored) == (5, 4, 1)
+    assert report.not_in_metadata == 1
     print("complete set: ok")
 
 
