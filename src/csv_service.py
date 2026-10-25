@@ -1,5 +1,6 @@
 import csv
 import os
+import threading
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import IO, Any, Self
@@ -36,6 +37,7 @@ class CsvService(LoggerMixin):
         self.rows_written = 0
         self._file: IO[str] | None = None
         self._writer: csv.DictWriter | None = None
+        self._lock = threading.Lock()
 
     def __enter__(self) -> Self:
         self.open()
@@ -65,15 +67,14 @@ class CsvService(LoggerMixin):
     def write_rows(self, rows: Iterable[Mapping[str, Any]]) -> int:
         if self._writer is None or self._file is None:
             raise RuntimeError("CsvService is not open")
-        count = 0
-        for row in rows:
-            self._writer.writerow(escape_row(row))
-            count += 1
-        # fsync so every written row survives a crash or power loss.
-        self._file.flush()
-        os.fsync(self._file.fileno())
-        self.rows_written += count
-        return count
+        rows = [escape_row(row) for row in rows]
+        with self._lock:
+            self._writer.writerows(rows)
+            # fsync so every written row survives a crash or power loss.
+            self._file.flush()
+            os.fsync(self._file.fileno())
+            self.rows_written += len(rows)
+        return len(rows)
 
     @classmethod
     def rewrite(cls, path: Path, fieldnames: Sequence[str], rows: Iterable[Mapping[str, Any]]) -> None:

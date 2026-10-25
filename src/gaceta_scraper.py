@@ -1,5 +1,6 @@
 import json
 import math
+import threading
 from collections import Counter
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
@@ -9,10 +10,11 @@ from typing import Any
 
 from src.config import Settings
 from src.csv_service import CsvService
+from src.download_pool import DownloadPool
 from src.failed_registry import FailedRegistry
 from src.file_service import FileService, FileServiceError
 from src.models import Category, CsvRecord, MetadataRecord, Publication, PublicationDetail, SearchResult, parse_date
-from src.scraper import BaseScraper, HttpError, ScraperError
+from src.scraper import BaseScraper, HttpError, RateLimiter, ScraperError
 
 # Types offered by the site's "Publicación" dropdown (POST publicaciones/catalogos/lista).
 TASK_PUBLICATION_TYPES: dict[str, str] = {
@@ -76,6 +78,7 @@ class GacetaScraper(BaseScraper):
 
     The API loses rows when paginating, so every request has to fit into one page:
     big types go by date windows, and windows that are still too big are split further.
+    Searches run one by one in the main thread, downloads go to a pool of worker threads.
     """
 
     def __init__(
@@ -90,8 +93,15 @@ class GacetaScraper(BaseScraper):
         self.files = file_service
         self.failed = failed
         self.stats = RunStats()
+        self.download_limiter = RateLimiter(settings.download_interval)
+        self._downloads = DownloadPool(settings.download_workers)
+        self._stats_lock = threading.Lock()
         self._seen_ids: set[str] = set()
         self._failed_this_run: set[str] = set()
+
+    def close(self) -> None:
+        self._downloads.shutdown()
+        super().close()
 
     def run(self) -> RunStats:
         date_from = self.settings.date_from
@@ -102,12 +112,7 @@ class GacetaScraper(BaseScraper):
 
         large_types = self._collect_small_types(types, date_from, date_to)
         self._collect_by_windows(large_types, date_from, date_to)
-
-        if self._failed_this_run:
-            # Server errors are often temporary, so this run's failures get one more try.
-            self.retry_failed(self._failed_this_run)
-        self.log_summary()
-        return self.stats
+        return self._finish()
 
     def retry_failed(self, only_ids: set[str] | None = None) -> RunStats:
         """Retry publications from failed.csv: all of them or only `only_ids`."""
@@ -115,10 +120,20 @@ class GacetaScraper(BaseScraper):
         self.logger.info("Retrying %d failed publications", len(records))
         for record in records:
             name = ALL_PUBLICATION_TYPES.get(record.type_code, f"Tipo {record.type_code}")
+            publication = record.to_publication(Category(record.type_code, name))
             # failed.csv keeps no text, so even text types go through the detail.
-            self.process(record.to_publication(Category(record.type_code, name)), force_detail=True)
+            self._downloads.submit(self.process, publication, force_detail=True)
+        self._downloads.wait()
         if only_ids is None:
             self.log_summary()
+        return self.stats
+
+    def _finish(self) -> RunStats:
+        self._downloads.wait()
+        if self._failed_this_run:
+            # Server errors are often temporary, so this run's failures get one more try.
+            self.retry_failed(set(self._failed_this_run))
+        self.log_summary()
         return self.stats
 
     def select_types(self) -> list[Category]:
@@ -235,13 +250,14 @@ class GacetaScraper(BaseScraper):
         return SearchResult.from_api(data)
 
     def get_detail(self, publication_id: str, category: Category) -> PublicationDetail:
-        return PublicationDetail.from_api(self._api_get(f"publicaciones/{publication_id}"), category)
+        data = self._api_get(f"publicaciones/{publication_id}", limiter=self.download_limiter)
+        return PublicationDetail.from_api(data, category)
 
     def _api_post(self, url: str, payload: dict[str, Any]) -> Any:
         return self._unwrap(self.post_json(url, json=payload), url)
 
-    def _api_get(self, url: str) -> Any:
-        return self._unwrap(self.get_json(url), url)
+    def _api_get(self, url: str, limiter: RateLimiter | None = None) -> Any:
+        return self._unwrap(self.get_json(url, limiter=limiter), url)
 
     @staticmethod
     def _unwrap(body: dict[str, Any], url: str) -> Any:
@@ -263,7 +279,7 @@ class GacetaScraper(BaseScraper):
             if self.settings.metadata_only:
                 self.save_metadata(publication)
             else:
-                self.process(publication)
+                self._downloads.submit(self.process, publication)
         return not self._limit_reached(category)
 
     def _limit_reached(self, category: Category) -> bool:
@@ -277,10 +293,10 @@ class GacetaScraper(BaseScraper):
         self.stats.metadata_rows += 1
 
     def process(self, publication: Publication, force_detail: bool = False) -> None:
-        """Save a publication as PDF and add it to the CSV; failures go to failed.csv."""
+        """Save a publication as PDF and add it to the CSV; failures go to failed.csv. Runs in a worker thread."""
         path = self._file_path(publication)
         if self.files.exists(path):
-            self.stats.skipped += 1
+            self._count("skipped")
             self.failed.remove(publication.id)
             self.logger.debug("Skip existing %s", path.name)
             return
@@ -306,7 +322,7 @@ class GacetaScraper(BaseScraper):
         detail = self.get_detail(publication.id, publication.category)
         if detail.has_document:
             self.files.save_base64_pdf(path, detail.document_b64)
-            self.stats.pdf_saved += 1
+            self._count("pdf_saved")
             self.logger.info("Saved PDF %s", path.name)
             return
 
@@ -325,7 +341,7 @@ class GacetaScraper(BaseScraper):
             f"Denominación / Razón social: {publication.company_name}",
         ]
         self.files.save_text_as_pdf(path, publication.title, body, is_html=is_html, meta=meta)
-        self.stats.pdf_generated += 1
+        self._count("pdf_generated")
         self.logger.info("Generated PDF %s", path.name)
 
     def _write_csv_row(self, publication: Publication, path: Path) -> None:
@@ -337,10 +353,16 @@ class GacetaScraper(BaseScraper):
 
     def _mark_failed(self, publication: Publication, exc: Exception) -> None:
         reason = self._failure_reason(exc)
-        self.stats.failed += 1
-        self._failed_this_run.add(publication.id)
+        with self._stats_lock:
+            self.stats.failed += 1
+            self._failed_this_run.add(publication.id)
         self.failed.add(publication, reason)
         self.logger.error("Failed %s (id %s): %s", publication.code, publication.id, reason)
+
+    def _count(self, stat: str) -> None:
+        """Increment a RunStats counter; called from download threads."""
+        with self._stats_lock:
+            setattr(self.stats, stat, getattr(self.stats, stat) + 1)
 
     @staticmethod
     def _failure_reason(exc: Exception) -> str:

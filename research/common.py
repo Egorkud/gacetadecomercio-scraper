@@ -84,5 +84,5 @@ class ResearchApi(BaseScraper):
 
     def raw(self, method: str, url: str, **kwargs: Any) -> Response:
         """Single request without retries that never raises on HTTP errors."""
-        self._throttle()
+        self.limiter.wait()
         return self.session.request(method, self.build_url(url), timeout=self.settings.timeout, **kwargs)

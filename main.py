@@ -14,6 +14,13 @@ from src.models import CsvRecord, MetadataRecord
 RUN_ID_FORMAT = "%Y-%m-%d_%H-%M-%S"
 
 
+def positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return number
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Scraper for gacetadecomercio.gob.bo publications")
     parser.add_argument("--limit", type=int, help="max publications per type")
@@ -26,7 +33,8 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument("--retry-failed", action="store_true", help="only retry publications listed in failed.csv")
     mode.add_argument("--metadata-only", action="store_true", help="write metadata.csv without downloading files")
     mode.add_argument("--merge", action="store_true", help="merge run CSVs into a checked publications_complete.csv")
-    parser.add_argument("--min-interval", type=float, help="min seconds between requests")
+    parser.add_argument("--search-interval", type=float, help="min seconds between search requests")
+    parser.add_argument("--workers", type=positive_int, help="parallel downloads, 20 by default")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
     if args.days is not None and args.date_from is not None:
@@ -47,8 +55,10 @@ def build_settings(args: argparse.Namespace) -> Settings:
         options["date_from"] = args.date_from
     if args.days is not None:
         options["date_from"] = (args.date_to or date.today()) - timedelta(days=args.days - 1)
-    if args.min_interval is not None:
-        options["min_request_interval"] = args.min_interval
+    if args.search_interval is not None:
+        options["search_interval"] = args.search_interval
+    if args.workers is not None:
+        options["download_workers"] = args.workers
     return Settings(**options)
 
 

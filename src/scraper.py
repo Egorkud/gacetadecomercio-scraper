@@ -1,4 +1,5 @@
 import re
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -31,11 +32,31 @@ class RequestFailedError(ScraperError):
     pass
 
 
+class RateLimiter:
+    """Keeps at least `interval` seconds between request starts, shared by all threads."""
+
+    def __init__(self, interval: float) -> None:
+        self.interval = interval
+        self._next_at = 0.0
+        self._lock = threading.Lock()
+
+    def wait(self) -> None:
+        if self.interval <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            start_at = max(now, self._next_at)
+            self._next_at = start_at + self.interval
+        time.sleep(start_at - now)
+
+
 class BaseScraper(LoggerMixin):
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.session = requests.Session(impersonate=settings.impersonate, headers=settings.headers)
-        self._last_request_at = 0.0
+        self.limiter = RateLimiter(settings.search_interval)
+        self._local = threading.local()
+        self._sessions: list[requests.Session] = []
+        self._sessions_lock = threading.Lock()
 
     def __enter__(self) -> Self:
         return self
@@ -43,8 +64,22 @@ class BaseScraper(LoggerMixin):
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
+    @property
+    def session(self) -> requests.Session:
+        """Session of the current thread; a curl handle must not be shared between threads."""
+        session = getattr(self._local, "session", None)
+        if session is None:
+            session = requests.Session(impersonate=self.settings.impersonate, headers=self.settings.headers)
+            self._local.session = session
+            with self._sessions_lock:
+                self._sessions.append(session)
+        return session
+
     def close(self) -> None:
-        self.session.close()
+        with self._sessions_lock:
+            for session in self._sessions:
+                session.close()
+            self._sessions.clear()
 
     def get(self, url: str, params: dict[str, Any] | None = None, **kwargs: Any) -> Response:
         return self.request("GET", url, params=params, **kwargs)
@@ -64,15 +99,19 @@ class BaseScraper(LoggerMixin):
     def post_json(self, url: str, json: Any = None, **kwargs: Any) -> Any:
         return self.parse_json(self.post(url, json=json, **kwargs))
 
-    def request(self, method: str, url: str, **kwargs: Any) -> Response:
-        """Throttled request, retried on network errors, Cloudflare blocks and 5xx."""
+    def request(self, method: str, url: str, limiter: RateLimiter | None = None, **kwargs: Any) -> Response:
+        """Rate limited request, retried on network errors, Cloudflare blocks and 5xx.
+
+        Uses `self.limiter` unless another limiter is given.
+        """
+        limiter = limiter or self.limiter
         url = self.build_url(url)
         kwargs.setdefault("timeout", self.settings.timeout)
         retries = self.settings.max_retries
         reason = ""
 
         for attempt in range(1, retries + 1):
-            self._throttle()
+            limiter.wait()
             try:
                 response = self.session.request(method, url, **kwargs)
             except RequestException as exc:
@@ -116,12 +155,6 @@ class BaseScraper(LoggerMixin):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(response.content)
         return path
-
-    def _throttle(self) -> None:
-        wait = self.settings.min_request_interval - (time.monotonic() - self._last_request_at)
-        if wait > 0:
-            time.sleep(wait)
-        self._last_request_at = time.monotonic()
 
     def _backoff(self, attempt: int) -> float:
         return min(self.settings.backoff_base * 2 ** (attempt - 1), self.settings.backoff_max)

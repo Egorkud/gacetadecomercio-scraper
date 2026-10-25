@@ -31,10 +31,13 @@ class Settings:
 
     # TLS fingerprint matches the Firefox User-Agent in DEFAULT_HEADERS.
     impersonate: str = "firefox147"
-    timeout: float = 60.0
+    timeout: float = 120.0  # parallel PDF downloads can take over a minute
 
     page_size: int = 100  # API accepts 10..100
-    min_request_interval: float = 8.0
+    # Cloudflare bans searches above ~10 per minute; detail requests are not limited.
+    search_interval: float = 8.0
+    download_interval: float = 0.0
+    download_workers: int = 20
     max_retries: int = 5
     backoff_base: float = 5.0
     backoff_max: float = 300.0
