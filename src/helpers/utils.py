@@ -1,9 +1,11 @@
 """Small general-purpose helpers that know nothing about the site."""
 import argparse
+import os
 import re
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta
 from html import unescape
+from pathlib import Path
 
 TIMESTAMP_FORMAT = "%Y-%m-%d_%H-%M-%S"
 
@@ -72,6 +74,18 @@ def safe_filename(value: str, max_length: int) -> str:
 
 def slugify(text: str) -> str:
     return NON_WORD_RE.sub("-", text).strip("-")
+
+
+def load_env(path: Path) -> None:
+    """Put KEY=VALUE lines of a .env file into os.environ; variables already set win."""
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 
 def positive_int(value: str) -> int:

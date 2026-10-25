@@ -63,6 +63,7 @@ def main() -> None:
     setup_logging(settings.logs_dir / f"scraper_{run_id}.log", settings.log_level)
     logger = logging.getLogger("main")
     logger.info("Run %s started with %s", run_id, settings)
+    logger.info("Proxy: %s", "on" if settings.proxy else "off")
 
     failed = FailedRegistry(settings.failed_path)
     if args.merge:

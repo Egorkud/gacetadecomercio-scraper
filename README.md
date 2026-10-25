@@ -13,6 +13,8 @@ uv run python main.py --days 7
 
 This collects the last week. PDFs land in `output/files/`, the CSV in `output/`, logs in `logs/`.
 
+To send requests through a proxy, copy `.env.example` to `.env` and set `PROXY`, e.g. `PROXY=http://user:password@host:port`. Without it the scraper connects directly.
+
 ## How it works
 
 The site has no data of its own: it is a single-page app that loads everything from a public API at `servicios.seprec.gob.bo/api`. The scraper talks to the same API, so it sees exactly what the site shows.

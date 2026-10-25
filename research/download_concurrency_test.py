@@ -134,7 +134,9 @@ async def run_concurrent(name: str, ids: list[str], workers: int, minutes: float
     step = Step(name)
     numbers = iter(range(max_requests))
 
-    async with AsyncSession(impersonate=SETTINGS.impersonate, headers=SETTINGS.headers, max_clients=workers) as session:
+    async with AsyncSession(
+        impersonate=SETTINGS.impersonate, headers=SETTINGS.headers, proxy=SETTINGS.proxy, max_clients=workers,
+    ) as session:
         async def worker() -> None:
             for number in numbers:
                 if time.time() - step.started > minutes * 60 or step.blocked:

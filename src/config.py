@@ -1,8 +1,13 @@
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
+from src.helpers.utils import load_env
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+load_env(PROJECT_ROOT / ".env")
 
 # Without Origin/Referer the API answers with a Cloudflare challenge page.
 DEFAULT_HEADERS: dict[str, str] = {
@@ -31,6 +36,9 @@ class Settings:
 
     # TLS fingerprint matches the Firefox User-Agent in DEFAULT_HEADERS.
     impersonate: str = "firefox147"
+    # PROXY in .env, e.g. http://user:password@host:port; no proxy when it is not set.
+    # Hidden from repr so the password never reaches the logs.
+    proxy: str | None = field(default_factory=lambda: os.environ.get("PROXY") or None, repr=False)
     timeout: float = 120.0  # parallel PDF downloads can take over a minute
 
     page_size: int = 100  # API accepts 10..100

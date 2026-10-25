@@ -68,7 +68,9 @@ class BaseScraper(LoggerMixin):
         """Session of the current thread; a curl handle must not be shared between threads."""
         session = getattr(self._local, "session", None)
         if session is None:
-            session = requests.Session(impersonate=self.settings.impersonate, headers=self.settings.headers)
+            session = requests.Session(
+                impersonate=self.settings.impersonate, headers=self.settings.headers, proxy=self.settings.proxy,
+            )
             self._local.session = session
             with self._sessions_lock:
                 self._sessions.append(session)

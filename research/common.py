@@ -47,7 +47,7 @@ def date_filter(first_day: str, last_day: str | None = None) -> dict[str, str]:
 
 def new_session() -> requests.Session:
     """Bare session without pauses and retries, used by the rate limit tests."""
-    return requests.Session(impersonate=SETTINGS.impersonate, headers=SETTINGS.headers)
+    return requests.Session(impersonate=SETTINGS.impersonate, headers=SETTINGS.headers, proxy=SETTINGS.proxy)
 
 
 def save_results(name: str, data: Any) -> Path:
