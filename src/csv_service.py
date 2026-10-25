@@ -92,22 +92,3 @@ class CsvService(LoggerMixin):
     def read_rows(cls, path: Path) -> list[dict[str, str]]:
         with path.open(encoding=cls.ENCODING, newline="") as f:
             return [{key: unescape_cell(value or "") for key, value in row.items()} for row in csv.DictReader(f)]
-
-    @classmethod
-    def merge(cls, paths: Iterable[Path], output: Path, key: str | None = None) -> int:
-        """Merge run CSVs into one file; optionally de-duplicate by `key` column."""
-        seen: set[str] = set()
-        fieldnames: list[str] | None = None
-        rows: list[dict[str, str]] = []
-        for path in paths:
-            for row in cls.read_rows(path):
-                fieldnames = fieldnames or list(row)
-                if key:
-                    if row[key] in seen:
-                        continue
-                    seen.add(row[key])
-                rows.append(row)
-        if fieldnames is None:
-            return 0
-        with cls(output, fieldnames) as service:
-            return service.write_rows(rows)

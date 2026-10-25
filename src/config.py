@@ -64,5 +64,13 @@ class Settings:
         return self.output_dir / "failed.csv"
 
     @property
+    def complete_path(self) -> Path:
+        return self.output_dir / "publications_complete.csv"
+
+    @property
+    def missing_path(self) -> Path:
+        return self.output_dir / "missing.csv"
+
+    @property
     def headers(self) -> dict[str, str]:
         return dict(DEFAULT_HEADERS)

@@ -2,6 +2,7 @@ import argparse
 import logging
 from datetime import date, datetime, timedelta
 
+from src.complete_set import CompleteSetBuilder
 from src.config import Settings
 from src.csv_service import CsvService
 from src.failed_registry import FailedRegistry
@@ -24,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--retry-failed", action="store_true", help="only retry publications listed in failed.csv")
     mode.add_argument("--metadata-only", action="store_true", help="write metadata.csv without downloading files")
+    mode.add_argument("--merge", action="store_true", help="merge run CSVs into a checked publications_complete.csv")
     parser.add_argument("--min-interval", type=float, help="min seconds between requests")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args()
@@ -59,12 +61,16 @@ def main() -> None:
     logger = logging.getLogger("main")
     logger.info("Run %s started with %s", run_id, settings)
 
+    failed = FailedRegistry(settings.failed_path)
+    if args.merge:
+        CompleteSetBuilder(settings, failed).build()
+        return
+
     if settings.metadata_only:
         csv_path, record_type = settings.output_dir / f"metadata_{run_id}.csv", MetadataRecord
     else:
         csv_path, record_type = settings.output_dir / f"publications_{run_id}.csv", CsvRecord
     file_service = FileService(settings.files_dir)
-    failed = FailedRegistry(settings.failed_path)
     try:
         with (
             CsvService(csv_path, record_type.fieldnames()) as csv_service,

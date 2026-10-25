@@ -216,5 +216,22 @@ class MetadataRecord:
             scraped_at=scraped_at.isoformat(timespec="seconds"),
         )
 
+    @classmethod
+    def from_row(cls, row: dict[str, str]) -> Self:
+        return cls(**row)
+
+    def to_publication(self) -> Publication:
+        return Publication(
+            id=self.id,
+            code=self.code,
+            title=self.title,
+            summary="",
+            published_at=parse_date(self.publication_date),
+            company_name=self.company_name,
+            matricula=self.matricula,
+            matricula_anterior=self.matricula_anterior or None,
+            category=Category(self.type_code, self.type_name),
+        )
+
     def to_row(self) -> dict[str, str]:
         return asdict(self)
