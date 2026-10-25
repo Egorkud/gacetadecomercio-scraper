@@ -98,6 +98,25 @@ uv run python main.py --from-missing --categories 1009 --workers 10
 | `output/failed.csv` | Publications the server couldn't return, usually HTTP 412 |
 | `logs/scraper_<run>.log` | Run log with the completeness check at the end |
 
+## Project structure
+
+```
+main.py                  command line: parses flags and starts the chosen mode
+src/
+  config.py              all settings and request headers
+  scraper.py             HTTP client: rate limiting, retries, Cloudflare handling
+  gaceta_scraper.py      the site logic: types, date splitting, downloads
+  download_pool.py       worker threads for parallel downloads
+  models.py              publications and the rows of every CSV
+  file_service.py        file names, folders and saving PDFs
+  csv_service.py         crash-safe CSV writing
+  failed_registry.py     failed.csv
+  complete_set.py        --merge: final CSV and file checks
+  logger.py              logging to console and file
+  helpers/utils.py       small general helpers: dates, text, file names
+research/                scripts used to study the API
+```
+
 ## Good to know
 
 - Cloudflare blocks the IP for 30 minutes after more than about 10 searches a minute, which is why searches wait 8 seconds between each other. Downloads have no such limit.
