@@ -33,6 +33,7 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument("--retry-failed", action="store_true", help="only retry publications listed in failed.csv")
     mode.add_argument("--metadata-only", action="store_true", help="write metadata.csv without downloading files")
     mode.add_argument("--merge", action="store_true", help="merge run CSVs into a checked publications_complete.csv")
+    mode.add_argument("--from-missing", action="store_true", help="download missing.csv by id, without searching")
     parser.add_argument("--search-interval", type=float, help="min seconds between search requests")
     parser.add_argument("--workers", type=positive_int, help="parallel downloads, 20 by default")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
@@ -88,6 +89,8 @@ def main() -> None:
         ):
             if args.retry_failed:
                 scraper.retry_failed()
+            elif args.from_missing:
+                scraper.run_from_missing()
             else:
                 scraper.run()
     except KeyboardInterrupt:

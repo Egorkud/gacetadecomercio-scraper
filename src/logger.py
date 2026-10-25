@@ -27,6 +27,8 @@ def setup_logging(log_file: Path, level: str = "INFO") -> None:
 
     for noisy in ("curl_cffi", "fontTools", "fpdf", "PIL"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    # Broken HTML in the site's texts is rendered anyway, its warnings are only noise.
+    logging.getLogger("fpdf.html").setLevel(logging.ERROR)
 
 
 class LoggerMixin:

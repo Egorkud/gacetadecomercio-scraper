@@ -114,6 +114,25 @@ class GacetaScraper(BaseScraper):
         self._collect_by_windows(large_types, date_from, date_to)
         return self._finish()
 
+    def run_from_missing(self) -> RunStats:
+        """Download publications listed in missing.csv straight by id, without the search step.
+
+        missing.csv comes from --metadata-only and --merge; publications newer than that metadata are not in it.
+        """
+        path = self.settings.missing_path
+        if not path.exists():
+            raise FileNotFoundError(f"{path} not found, run --metadata-only and --merge first")
+        records = self._select_missing(path)
+        self.logger.info("Downloading %d publications from %s", len(records), path.name)
+        for record in records:
+            publication = record.to_publication()
+            if self._limit_reached(publication.category):
+                continue
+            self.stats.per_type[record.type_code] += 1
+            # missing.csv keeps no text, so text types also go through the detail.
+            self._downloads.submit(self.process, publication, force_detail=True)
+        return self._finish()
+
     def retry_failed(self, only_ids: set[str] | None = None) -> RunStats:
         """Retry publications from failed.csv: all of them or only `only_ids`."""
         records = [record for record in self.failed.records() if only_ids is None or record.id in only_ids]
@@ -127,6 +146,14 @@ class GacetaScraper(BaseScraper):
         if only_ids is None:
             self.log_summary()
         return self.stats
+
+    def _select_missing(self, path: Path) -> list[MetadataRecord]:
+        """Rows of missing.csv that match the selected types and dates."""
+        codes = {category.code for category in self.select_types()}
+        date_from = self.settings.date_from.isoformat()
+        date_to = (self.settings.date_to or date.today()).isoformat()
+        records = (MetadataRecord.from_row(row) for row in CsvService.read_rows(path))
+        return [r for r in records if r.type_code in codes and date_from <= r.publication_date <= date_to]
 
     def _finish(self) -> RunStats:
         self._downloads.wait()
