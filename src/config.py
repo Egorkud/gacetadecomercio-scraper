@@ -49,6 +49,7 @@ class Settings:
     limit_per_type: int | None = None
     categories: tuple[str, ...] = ()
     all_types: bool = False
+    metadata_only: bool = False  # list requests only, no downloads
 
     output_dir: Path = PROJECT_ROOT / "output"
     logs_dir: Path = PROJECT_ROOT / "logs"

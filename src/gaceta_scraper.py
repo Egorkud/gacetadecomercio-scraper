@@ -11,7 +11,7 @@ from src.config import Settings
 from src.csv_service import CsvService
 from src.failed_registry import FailedRegistry
 from src.file_service import FileService, FileServiceError
-from src.models import Category, CsvRecord, Publication, PublicationDetail, SearchResult, parse_date
+from src.models import Category, CsvRecord, MetadataRecord, Publication, PublicationDetail, SearchResult, parse_date
 from src.scraper import BaseScraper, HttpError, ScraperError
 
 # Types offered by the site's "Publicación" dropdown (POST publicaciones/catalogos/lista).
@@ -66,7 +66,9 @@ class RunStats:
     pdf_generated: int = 0
     skipped: int = 0
     failed: int = 0
+    metadata_rows: int = 0
     per_type: Counter[str] = field(default_factory=Counter)
+    expected_per_type: Counter[str] = field(default_factory=Counter)
 
 
 class GacetaScraper(BaseScraper):
@@ -141,6 +143,7 @@ class GacetaScraper(BaseScraper):
         for category in types:
             result = self.search(category.code, date_from, date_to)
             self.logger.info("[%s] %s: %d publications", category.code, category.name, result.total)
+            self.stats.expected_per_type[category.code] = result.total
             if result.total <= self.settings.page_size:
                 self._consume(category, result.rows)
             else:
@@ -237,12 +240,22 @@ class GacetaScraper(BaseScraper):
                 continue
             self._seen_ids.add(row["id"])
             self.stats.per_type[category.code] += 1
-            self.process(Publication.from_api(row, category))
+            publication = Publication.from_api(row, category)
+            if self.settings.metadata_only:
+                self.save_metadata(publication)
+            else:
+                self.process(publication)
         return not self._limit_reached(category)
 
     def _limit_reached(self, category: Category) -> bool:
         limit = self.settings.limit_per_type
         return limit is not None and self.stats.per_type[category.code] >= limit
+
+    def save_metadata(self, publication: Publication) -> None:
+        """Write the list row to metadata.csv; file_name is where `process` would save the PDF."""
+        file_name = self._relative_name(self._file_path(publication))
+        self.csv.write_row(MetadataRecord.from_publication(publication, file_name, datetime.now()).to_row())
+        self.stats.metadata_rows += 1
 
     def process(self, publication: Publication, force_detail: bool = False) -> None:
         """Save a publication as PDF and add it to the CSV; failures go to failed.csv."""
@@ -297,8 +310,11 @@ class GacetaScraper(BaseScraper):
         self.logger.info("Generated PDF %s", path.name)
 
     def _write_csv_row(self, publication: Publication, path: Path) -> None:
-        file_name = path.relative_to(self.files.files_dir).as_posix()
+        file_name = self._relative_name(path)
         self.csv.write_row(CsvRecord.from_publication(publication, file_name, datetime.now()).to_row())
+
+    def _relative_name(self, path: Path) -> str:
+        return path.relative_to(self.files.files_dir).as_posix()
 
     def _mark_failed(self, publication: Publication, exc: Exception) -> None:
         reason = self._failure_reason(exc)
@@ -321,15 +337,34 @@ class GacetaScraper(BaseScraper):
 
     def log_summary(self) -> None:
         stats = self.stats
-        self.logger.info(
-            "Done: %d PDFs saved, %d generated, %d skipped, %d failed attempts",
-            stats.pdf_saved, stats.pdf_generated, stats.skipped, stats.failed,
-        )
+        if self.settings.metadata_only:
+            self.logger.info("Done: %d metadata rows", stats.metadata_rows)
+        else:
+            self.logger.info(
+                "Done: %d PDFs saved, %d generated, %d skipped, %d failed attempts",
+                stats.pdf_saved, stats.pdf_generated, stats.skipped, stats.failed,
+            )
         for code, count in sorted(stats.per_type.items()):
             self.logger.info("  [%s] %d publications", code, count)
-        if len(self.failed):
+        self._check_completeness()
+        if len(self.failed) and not self.settings.metadata_only:
             still_failed = sum(publication_id in self.failed for publication_id in self._failed_this_run)
             self.logger.warning(
                 "%d publications of this run are unavailable on the server, %d in total; see %s",
                 still_failed, len(self.failed), self.failed.path,
             )
+
+    def _check_completeness(self) -> None:
+        """Compare collected publications per type with the totals the API reported at the start."""
+        if self.settings.limit_per_type is not None or not self.stats.expected_per_type:
+            return
+        mismatches = {
+            code: (self.stats.per_type[code], expected)
+            for code, expected in self.stats.expected_per_type.items()
+            if self.stats.per_type[code] != expected
+        }
+        if not mismatches:
+            self.logger.info("Complete: every type matches the API total")
+        for code, (collected, expected) in sorted(mismatches.items()):
+            # New publications during a long run also show up here.
+            self.logger.warning("[%s] collected %d of %d publications reported by the API", code, collected, expected)

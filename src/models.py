@@ -177,3 +177,44 @@ class CsvRecord:
 
     def to_row(self) -> dict[str, str]:
         return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class MetadataRecord:
+    """Row of metadata.csv: every publication without downloading it, to prove the collection is complete."""
+
+    id: str
+    type_code: str
+    type_name: str
+    code: str
+    publication_date: str
+    company_name: str
+    matricula: str
+    matricula_anterior: str
+    title: str
+    file_name: str
+    scraped_at: str
+
+    @classmethod
+    def fieldnames(cls) -> list[str]:
+        return [f.name for f in fields(cls)]
+
+    @classmethod
+    def from_publication(cls, publication: Publication, file_name: str, scraped_at: datetime) -> Self:
+        category = publication.category
+        return cls(
+            id=publication.id,
+            type_code=category.code if category else "",
+            type_name=category.name if category else "",
+            code=publication.code,
+            publication_date=publication.published_at.isoformat() if publication.published_at else "",
+            company_name=publication.company_name,
+            matricula=publication.matricula,
+            matricula_anterior=publication.matricula_anterior or "",
+            title=publication.title,
+            file_name=file_name,
+            scraped_at=scraped_at.isoformat(timespec="seconds"),
+        )
+
+    def to_row(self) -> dict[str, str]:
+        return asdict(self)
