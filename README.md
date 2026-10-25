@@ -104,6 +104,7 @@ uv run python main.py --from-missing --categories 1009 --workers 10
 
 ```
 main.py                  command line: parses flags and starts the chosen mode
+.env.example             template for .env (proxy)
 src/
   config.py              all settings and request headers
   scraper.py             HTTP client: rate limiting, retries, Cloudflare handling
