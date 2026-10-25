@@ -34,7 +34,7 @@ class Settings:
     timeout: float = 60.0
 
     page_size: int = 100  # API accepts 10..100
-    min_request_interval: float = 12.0
+    min_request_interval: float = 8.0
     max_retries: int = 5
     backoff_base: float = 5.0
     backoff_max: float = 300.0
